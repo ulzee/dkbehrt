@@ -2,10 +2,13 @@
 import torch
 from torch.utils.data import Dataset
 import numpy as np
+from random import shuffle
 
 class ICDDataset(Dataset):
-    def __init__(self, dxs, tokenizer, patient_ids, separator):
+    def __init__(self, dxs, tokenizer, patient_ids, separator, max_length=None, shuffle_in_visit=True):
         self.dxs = dxs
+        self.shuffle_in_visit = shuffle_in_visit
+        self.max_length = max_length
         self.tokenizer = tokenizer
         self.separator = separator
         pdict = { i: True for i in patient_ids }
@@ -18,14 +21,30 @@ class ICDDataset(Dataset):
         visits = self.dxs[self.pids[i]]['codes']['visits']
         vid = visits[0]
 
-        code_series = ''
+        byvisit = []
+        cinv = []
+        vid = visits[0]
         for c, v in zip(concepts, visits):
             if v != vid:
                 vid = v
-                code_series += f' {self.separator}'
-            code_series += f' {c}'
+                byvisit += [cinv]
+                cinv = []
+            cinv += [c]
+        if len(cinv):
+            byvisit += [cinv]
 
-        return { k: v for k, v in self.tokenizer(code_series, padding=True).items()  if k not in ['token_type_ids']}
+        code_series = ''
+        for vi, cinv in enumerate(byvisit):
+            if self.shuffle_in_visit:
+                shuffle(cinv)
+            for c in cinv:
+                code_series += f' {c}'
+            if vi != len(byvisit) - 1: code_series += f' {self.separator}'
+
+        return { k: v for k, v in self.tokenizer(
+            code_series, padding=True,
+            truncation=self.max_length is not None,
+            max_length=self.max_length).items()  if k not in ['token_type_ids']}
 
 def topk_accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
