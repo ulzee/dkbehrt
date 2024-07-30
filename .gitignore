@@ -1,0 +1,7 @@
+wandb
+runs
+.vscode
+saved
+test_trainer
+*.pth
+paths.py
