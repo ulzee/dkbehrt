@@ -61,18 +61,19 @@ datasets = { phase: utils.ICDDataset(
 ) for phase, ids in phase_ids.items() }
 
 data_collator = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio
+    tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
+mdlname = f'bert-{args.mode}-layers{args.layers}-h{args.heads}'
 training_args = TrainingArguments(
-    output_dir=f'runs/bert-{args.mode}',
+    output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
     per_device_eval_batch_size=16,
     learning_rate=args.lr,
     num_train_epochs=args.epochs,
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
-    run_name=f'bert-{args.mode}',
+    run_name=mdlname,
     eval_steps=500,
     save_steps=1000,
 )
@@ -97,7 +98,7 @@ trainer = Trainer(
     eval_dataset=datasets['val'],
     compute_metrics=compute_metrics,
 )
-# %%
+#%%
 trainer.evaluate()
 trainer.train()
 # %%

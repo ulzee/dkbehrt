@@ -4,6 +4,29 @@ from torch.utils.data import Dataset
 import numpy as np
 from random import shuffle
 
+def gather_hidden_params(mdl):
+
+    c = 0
+    for ch in mdl.children():
+        c += gather_hidden_params(ch)
+    return c
+
+def count_parameters(model):
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    trainable_params += gather_hidden_params(model)
+
+    return trainable_params
+
+def paramscan(mdl, d=0):
+
+    for ch in mdl.children():
+        print(' '*d, count_parameters(ch), str(ch)[:10])
+        paramscan(ch, d=d+1)
+
+mf = lambda c: f'{c/1000/1000:.1f}M'
+bf = lambda c: f'{c/1000/1000/1000:.1f}B'
+
 class ICDDataset(Dataset):
     def __init__(self, dxs, tokenizer, patient_ids, separator, max_length=None, shuffle_in_visit=True):
         self.dxs = dxs
