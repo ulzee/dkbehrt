@@ -10,6 +10,11 @@ import shutil
 from glob import glob
 import json
 #%%
+if not os.path.exists(f'{project_root}/saved/tokenizers'):
+    os.mkdir(f'{project_root}/saved/tokenizers')
+if not os.path.exists(f'{project_root}/saved/tokenizers/bert'):
+    os.mkdir(f'{project_root}/saved/tokenizers/bert')
+#%%
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='config.json', cache_dir='saved/')
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='tokenizer.json', cache_dir='saved/')
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='tokenizer_config.json', cache_dir='saved/')
@@ -20,75 +25,41 @@ with open('saved/vocab.pk', 'rb') as fl:
 len(vocab)
 # %%
 required_tokens = [
-    '<unk>',
-    '<s>',
-    '</s>',
-    '<v>'
+    '[PAD]',
+    '[UNK]',
+    '[CLS]',
+    '[SEP]',
+    '[MASK]',
 ]
 
 new_token_set = required_tokens + [None for _ in vocab]
 
 for word, vi in vocab.items():
     new_token_set[vi + len(required_tokens)] = word.lower()
+
+with open(f'{project_root}/saved/tokenizers/medbert/vocab.txt', 'w') as fl:
+    fl.write('\n'.join(new_token_set))
 # %%
-# with open(glob(f'{project_root}/saved/models--mistralai--Mistral-7B-v0.1/snapshots/**/tokenizer.json')[0]) as fl:
 with open(glob(f'{project_root}/saved/models--google-bert--bert-base-uncased/snapshots/**/tokenizer.json')[0]) as fl:
     tkobj = json.load(fl)
 tkobj
 # %%
-tkobj['added_tokens'] = tkobj['added_tokens'][:len(required_tokens)]
-for i, tkn in enumerate(tkobj['added_tokens']):
-    tkn['id'] = i
-    tkn['content'] = required_tokens[i]
+for tkn in tkobj['added_tokens']:
+    tkn['id'] = new_token_set.index(tkn['content'])
 
-tkobj['model']['unk_token'] = '<unk>'
 tkobj['model']['vocab'] = { w: i for i, w in enumerate(new_token_set) }
-# tkobj['model']['merges'] = []
+
+tkobj['post_processor']['special_tokens']['[CLS]']['ids'] = [required_tokens.index('[CLS]')]
+tkobj['post_processor']['special_tokens']['[SEP]']['ids'] = [required_tokens.index('[SEP]')]
 
 tkobj
-#%%
-tkobj['post_processor']['single'] = [
-    {
-        "SpecialToken": {
-            "id": "<s>",
-            "type_id": 0
-        }
-    },
-    {
-        "Sequence": {
-            "id": "A",
-            "type_id": 0
-        }
-    }
-]
-tkobj['post_processor']['special_tokens'] = {
-    "<s>": {
-        "id": "<s>",
-        "ids": [
-            1
-        ],
-        "tokens": [
-            "<s>"
-        ]
-    },
-    "</s>": {
-        "id": "</s>",
-        "ids": [
-            2
-        ],
-        "tokens": [
-            "</s>"
-        ]
-    }
-}
-#%%
+# %%
 for fl in glob(f'{project_root}/saved/models--google-bert--bert-base-uncased/snapshots/**/*'):
     print(fl)
-    shutil.copyfile(fl, f'{project_root}/saved/tokenizers/gpt/' + fl.split('/')[-1])
-#%%
-with open(f'{project_root}/saved/tokenizers/gpt/vocab.txt', 'w') as fl:
+    shutil.copyfile(fl, f'{project_root}/saved/tokenizers/bert/' + fl.split('/')[-1])
+# %%
+with open(f'{project_root}/saved/tokenizers/bert/vocab.txt', 'w') as fl:
     fl.write('\n'.join(new_token_set))
 # %%
-with open(f'{project_root}/saved/tokenizers/gpt/tokenizer.json', 'w') as fl:
+with open(f'{project_root}/saved/tokenizers/bert/tokenizer.json', 'w') as fl:
     json.dump(tkobj, fl, indent=4)
-#%%

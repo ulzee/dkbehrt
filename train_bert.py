@@ -3,9 +3,8 @@ import argparse
 import os, sys
 #%%
 parser = argparse.ArgumentParser()
-parser.add_argument('--arch', type=str, default='llama')
-parser.add_argument('--layers', type=int, default=2)
-parser.add_argument('--heads', type=int, default=8)
+parser.add_argument('--layers', type=int, default=4)
+parser.add_argument('--heads', type=int, default=4)
 parser.add_argument('--batch_size', type=int, default=48)
 parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--epochs', type=int, default=100)
@@ -20,31 +19,25 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
 import torch
 import pickle as pk
 import numpy as np
-from transformers import MistralConfig, MistralForCausalLM, LlamaConfig, LlamaForCausalLM
+from transformers import BertConfig, BertForMaskedLM
 from transformers import AutoTokenizer, TrainingArguments, Trainer, DataCollatorForLanguageModeling
 from torch.utils.data import Dataset
 import utils
 #%%
-config_class, model_class = dict(
-    mistral=(MistralConfig, MistralForCausalLM),
-    llama=(LlamaConfig, LlamaForCausalLM),
-)[args.arch]
-#%%
 with open('saved/diagnoses.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
-tokenizer = AutoTokenizer.from_pretrained('./saved/tokenizers/gpt')
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = 'left'
+tokenizer = AutoTokenizer.from_pretrained('./saved/tokenizers/bert')
 #%%
-mdlconfig = config_class(
+bertconfig = BertConfig(
     vocab_size=len(tokenizer.vocab),
+    max_position_embeddings=tokenizer.model_max_length,
     hidden_size=192,
     num_hidden_layers=args.layers,
     num_attention_heads=args.heads,
     intermediate_size=1024,
 )
-model = model_class(mdlconfig)
+model = BertForMaskedLM(bertconfig)
 #%%
 optimizer = torch.optim.AdamW(
     model.parameters(),
@@ -53,14 +46,14 @@ optimizer = torch.optim.AdamW(
 # %%
 phase_ids = { phase: np.genfromtxt(f'artifacts/splits/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 phase_ids['val'] = phase_ids['val'][::10][:1024]
-datasets = { phase: utils.ICDDataset(dxs, tokenizer, ids, separator='<v>') for phase, ids in phase_ids.items() }
+datasets = { phase: utils.ICDDataset(dxs, tokenizer, ids, separator='[SEP]') for phase, ids in phase_ids.items() }
 
 data_collator = DataCollatorForLanguageModeling(
-    tokenizer=tokenizer, mlm=False
+    tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio
 )
 
 training_args = TrainingArguments(
-    output_dir=f'runs/gpt-{args.arch}',
+    output_dir=f'runs/bert-{args.arch}',
     per_device_train_batch_size=args.batch_size,
     per_device_eval_batch_size=16,
     learning_rate=args.lr,
@@ -72,7 +65,7 @@ training_args = TrainingArguments(
     save_steps=1000,
 )
 
-def compute_metrics(eval_pred, mask_value=-100, topks=(1, 5, 10)):
+def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
     logits, labels = eval_pred
     bsize, seqlen = labels.shape
 
@@ -80,9 +73,9 @@ def compute_metrics(eval_pred, mask_value=-100, topks=(1, 5, 10)):
     labels = torch.from_numpy(np.reshape(labels, (bsize*seqlen)))
     where_prediction = labels != mask_value
 
-    topaccs = utils.topk_accuracy(logits[where_prediction], labels[where_prediction], topk=topks)
+    topaccs = utils.accuracy(logits[where_prediction], labels[where_prediction], topk=topns)
 
-    return { f'top{n:02d}': acc for n, acc in zip(topks, topaccs) }
+    return { f'top{n:02d}': acc for n, acc in zip(topns, topaccs) }
 
 trainer = Trainer(
     model=model,
@@ -95,6 +88,6 @@ trainer = Trainer(
 # %%
 trainer.evaluate()
 trainer.train()
-# # %%
-torch.save(model.state_dict(), 'saved/gpt_basic.pth')
-# # %%
+# %%
+torch.save(model.state_dict(), 'saved/bert_basic.pth')
+# %%
