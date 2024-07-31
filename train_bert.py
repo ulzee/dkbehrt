@@ -53,15 +53,16 @@ if args.mode == 'emb':
     assert args.use_embedding is not None
     with open(args.use_embedding, 'rb') as fl:
         edict = pk.load(fl)
+    edim = len(next(iter(edict.values())))
 
-    filler = np.zeros(len(next(iter(edict.values()))))
-    els = []
+    template = np.zeros((len(tokenizer.vocab), edim))
     nmatched = 0
     for w, i in tokenizer.vocab.items():
         w = w.upper()
-        els += [edict[w] if w in edict else filler]
-        if w in edict: nmatched += 1
-    els = np.array(els).astype(np.float32)
+        if w in edict:
+            template[i] = edict[w]
+            nmatched += 1
+    els = np.array(template).astype(np.float32)
     els -= np.mean(els, axis=0)
     els /= np.std(els, axis=0)
 
@@ -74,8 +75,12 @@ if args.mode == 'emb':
     model.bert.embeddings = embeddings.InjectEmbeddings(bertconfig, els, keep_training=False)
 
 #%%
+if args.mode == 'emb':
+    param_list = [t[1] for t in model.named_parameters() if 'word_embeddings' not in t[0]]
+else:
+    param_list = list(model.parameters())
 optimizer = torch.optim.AdamW(
-    model.parameters(),
+    param_list,
     lr=args.lr,
 )
 # %%
