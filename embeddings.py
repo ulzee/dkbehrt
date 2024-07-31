@@ -18,10 +18,14 @@ class InjectEmbeddings(BertEmbeddings):
         super().__init__(config)
         try: assert extra_embeddings_data.shape == self.word_embeddings.weight.shape
         except: raise f'Provided emb size mismatch: {extra_embeddings_data.shape} vs {self.word_embeddings.weight.shape}'
-        # self.extra_embeddings = nn.Embedding(*extra_embeddings_data.shape, padding_idx=0)
-        # self.extra_embeddings.weight = nn.Parameter(torch.from_numpy(extra_embeddings_data), requires_grad=keep_training)
-        self.word_embeddings.weight.requires_grad_(False)
-        self.word_embeddings.weight[3:] = torch.from_numpy(extra_embeddings_data).float()[3:]
+        self.extra_embeddings = nn.Embedding(*extra_embeddings_data.shape, padding_idx=0)
+        self.extra_embeddings.weight = nn.Parameter(torch.from_numpy(extra_embeddings_data).float(), requires_grad=keep_training)
+        # self.word_embeddings.weight.requires_grad_(False)
+        # self.word_embeddings.weight[3:] = torch.from_numpy(extra_embeddings_data).float()[3:]
+
+        self.layer_norm_2 = nn.LayerNorm(self.LayerNorm.normalized_shape)
+        self.coef_learn = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+        self.coef_extra = nn.Parameter(torch.tensor(0.5), requires_grad=True)
 
     def forward(
         self,
@@ -56,5 +60,10 @@ class InjectEmbeddings(BertEmbeddings):
             position_embeddings = self.position_embeddings(position_ids)
             embeddings += position_embeddings
         embeddings = self.LayerNorm(embeddings)
+
+        # NOTE: new
+        embeddings = self.coef_learn * embeddings + \
+            self.coef_extra * self.layer_norm_2(self.extra_embeddings(input_ids))
+
         embeddings = self.dropout(embeddings)
         return embeddings

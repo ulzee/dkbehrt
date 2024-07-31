@@ -32,6 +32,8 @@ from transformers import AutoTokenizer, TrainingArguments, Trainer, DataCollator
 from torch.utils.data import Dataset
 import embeddings
 import utils
+import random, string
+run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 #%%
 with open('saved/diagnoses.pk', 'rb') as fl:
     dxs = pk.load(fl)
@@ -76,7 +78,8 @@ if args.mode == 'emb':
 
 #%%
 if args.mode == 'emb':
-    param_list = [t[1] for t in model.named_parameters() if 'word_embeddings' not in t[0]]
+    # These are embeddings passed by the user, they should not be backpropd
+    param_list = [t[1] for t in model.named_parameters() if 'extra_embeddings' not in t[0]]
 else:
     param_list = list(model.parameters())
 optimizer = torch.optim.AdamW(
@@ -99,7 +102,7 @@ data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
-mdlname = f'bert-{args.mode}-layers{args.layers}-h{args.heads}'
+mdlname = f'bert-{args.mode}-layers{args.layers}-h{args.heads}_{run_tag}'
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
@@ -124,6 +127,15 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
     topaccs = utils.topk_accuracy(logits[where_prediction], labels[where_prediction], topk=topns)
 
     return { f'top{n:02d}': acc for n, acc in zip(topns, topaccs) }
+
+def compute_metrics(eval_pred):
+    # TODO: these won't necessarily be positive, can they be contrained?
+    cl = model.bert.extra_embeddings.coef_learn.item()
+    ce = model.bert.extra_embeddings.coef_extra.item()
+    return {
+        'coef_learn': cl,
+        'coef_extra': ce,
+    }
 
 trainer = Trainer(
     model=model,
