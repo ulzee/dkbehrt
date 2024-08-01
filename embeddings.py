@@ -67,8 +67,8 @@ class InjectEmbeddings(BertEmbeddings):
         # NOTE: even better, allow to be attended differently per token
         #  External tokens may need to be passed separately to use attention
         #  They can share positional embedding to indicate that they are the same observation?
-        embeddings = self.coef_learn * embeddings + \
-            self.coef_extra * self.layer_norm_2(self.extra_embeddings(input_ids))
+        embeddings = self.coef_learn[input_ids].unsqueeze(-1) * embeddings + \
+            self.coef_extra[input_ids].unsqueeze(-1) * self.layer_norm_2(self.extra_embeddings(input_ids))
 
         embeddings = self.dropout(embeddings)
         return embeddings
