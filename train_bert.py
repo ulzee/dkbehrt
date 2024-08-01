@@ -129,11 +129,12 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
     for n, acc in zip(topns, topaccs):
         out[f'top{n:02d}'] = acc
 
-    inspect_idx = tokenizer.vocab['f32'] if 'f32' in tokenizer.vocab else tokenizer.vocab['f329']
-    cl = model.bert.embeddings.coef_learn[inspect_idx].item()
-    ce = model.bert.embeddings.coef_extra[inspect_idx].item()
-    out['coef_learn'] = cl
-    out['coef_extra'] = ce
+    if args.mode == 'emb':
+        inspect_idx = tokenizer.vocab['f32'] if 'f32' in tokenizer.vocab else tokenizer.vocab['f329']
+        cl = model.bert.embeddings.coef_learn[inspect_idx].item()
+        ce = model.bert.embeddings.coef_extra[inspect_idx].item()
+        out['coef_learn'] = cl
+        out['coef_extra'] = ce
 
     return out
 
