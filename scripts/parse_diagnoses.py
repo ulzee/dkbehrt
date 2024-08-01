@@ -12,7 +12,7 @@ import pickle as pk
 import json
 from dateutil.relativedelta import relativedelta
 #%%
-code_resolution = 3
+code_resolution = 5
 #%%
 pdf = pd.read_csv(f'{mimic_root}/hosp/patients.csv')
 pdf
@@ -79,10 +79,11 @@ for i in tqdm(range(len(lsd['hadm_id']))):
         if c not in vocab:
             vocab[c] = len(vocab)
     # break
+len(vocab)
 # %%
-with open(f'{project_root}/saved/diagnoses.pk', 'wb') as fl:
+with open(f'{project_root}/saved/diagnoses-cr{code_resolution}.pk', 'wb') as fl:
     pk.dump(bypatient, fl)
 # %%
-with open(f'{project_root}/saved/vocab.pk', 'wb') as fl:
+with open(f'{project_root}/saved/vocab-cr{code_resolution}.pk', 'wb') as fl:
     pk.dump(vocab, fl)
 # %%

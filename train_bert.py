@@ -14,6 +14,7 @@ parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--mask_ratio', type=float, default=0.15)
+parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--disable_visit_shuffle', action='store_true', default=False)
 args = parser.parse_args()
 #%%
@@ -35,10 +36,10 @@ import utils
 import random, string
 run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 #%%
-with open('saved/diagnoses.pk', 'rb') as fl:
+with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
-tokenizer = AutoTokenizer.from_pretrained('./saved/tokenizers/bert')
+tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
 #%%
 bert_emb_size = 192
 bertconfig = BertConfig(
@@ -102,7 +103,7 @@ data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
-mdlname = f'bert-{args.mode}-layers{args.layers}-h{args.heads}_{run_tag}'
+mdlname = f'bert-{args.mode}-cr{args.code_resolution}-layers{args.layers}-h{args.heads}_{run_tag}'
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
