@@ -26,7 +26,6 @@ class InjectEmbeddings(BertEmbeddings):
         ntokens = len(self.extra_embeddings.weight)
         self.layer_norm_2 = nn.LayerNorm(self.LayerNorm.normalized_shape)
         self.coef_learn = nn.Parameter(torch.tensor([0.5]*ntokens), requires_grad=True)
-        self.coef_extra = nn.Parameter(torch.tensor([0.5]*ntokens), requires_grad=True)
 
     def forward(
         self,

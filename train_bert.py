@@ -8,6 +8,7 @@ parser.add_argument('--use_embedding', type=str, default=None)
 parser.add_argument('--layers', type=int, default=4)
 parser.add_argument('--heads', type=int, default=4)
 parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--embdim', type=int, default=192)
 parser.add_argument('--eval_batch_size', type=int, default=16)
 parser.add_argument('--lr', type=float, default=1e-5)
 parser.add_argument('--epochs', type=int, default=100)
@@ -21,6 +22,7 @@ args = parser.parse_args()
 if not args.nowandb:
     os.environ["WANDB_PROJECT"] = "icd"
     os.environ["WANDB_LOG_MODEL"] = "end"
+    import wandb
 else:
     os.environ['WANDB_DISABLED'] = 'true'
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
@@ -28,7 +30,8 @@ import torch
 import torch.nn as nn
 import pickle as pk
 import numpy as np
-from transformers import BertConfig, BertForMaskedLM
+from transformers import BertConfig, BertForMaskedLM, TrainerCallback
+from transformers.integrations import WandbCallback
 from transformers import AutoTokenizer, TrainingArguments, Trainer, DataCollatorForLanguageModeling
 from torch.utils.data import Dataset
 import embeddings
@@ -41,7 +44,7 @@ with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
 #%%
 tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
 #%%
-bert_emb_size = 192
+bert_emb_size = args.embdim
 bertconfig = BertConfig(
     vocab_size=len(tokenizer.vocab),
     max_position_embeddings=tokenizer.model_max_length,
@@ -89,7 +92,7 @@ optimizer = torch.optim.AdamW(
 )
 # %%
 phase_ids = { phase: np.genfromtxt(f'artifacts/splits/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
-phase_ids['val'] = phase_ids['val'][::10][:1024]
+phase_ids['val'] = phase_ids['val'][::10][:512]
 datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
@@ -103,7 +106,7 @@ data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
-mdlname = f'bert-{args.mode}-cr{args.code_resolution}-layers{args.layers}-h{args.heads}_{run_tag}'
+mdlname = f'bert-{args.mode}-cr{args.code_resolution}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
@@ -133,11 +136,22 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
     if args.mode == 'emb':
         inspect_idx = tokenizer.vocab['f32'] if 'f32' in tokenizer.vocab else tokenizer.vocab['f329']
         cl = model.bert.embeddings.coef_learn[inspect_idx].item()
-        ce = model.bert.embeddings.coef_extra[inspect_idx].item()
         out['coef_learn'] = cl
-        out['coef_extra'] = ce
 
     return out
+
+# class CustomCallback(TrainerCallback):
+#     def on_log(self, __args, state, control, logs=None, **kwargs):
+#         # super().on_log(**kwargs)
+#         if state.is_local_process_zero:
+#             if args.mode == 'emb':
+#                 coefs = model.bert.embeddings.coef_learn.detach().cpu().numpy()
+#                 hist = np.histogram(coefs)
+#                 # table = wandb.Table(data=[[i] for i in coefs], columns=["coef_learn"])
+#                 wandb.log({
+#                     'histogram-coef_learn': wandb.Histogram(np_histogram=hist)
+#                 })
+
 
 trainer = Trainer(
     model=model,
@@ -146,6 +160,7 @@ trainer = Trainer(
     train_dataset=datasets['train'],
     eval_dataset=datasets['val'],
     compute_metrics=compute_metrics,
+    # callbacks=[CustomCallback()]
 )
 #%%
 trainer.evaluate()

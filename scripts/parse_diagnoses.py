@@ -12,7 +12,7 @@ import pickle as pk
 import json
 from dateutil.relativedelta import relativedelta
 #%%
-code_resolution = 5
+code_resolution = int(sys.argv[1])
 #%%
 pdf = pd.read_csv(f'{mimic_root}/hosp/patients.csv')
 pdf
