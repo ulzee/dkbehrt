@@ -125,17 +125,17 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
     where_prediction = labels != mask_value
 
     topaccs = utils.topk_accuracy(logits[where_prediction], labels[where_prediction], topk=topns)
+    out = dict
+    for n, acc in zip(topns, topaccs):
+        out[f'top{n:02d}'] = acc
 
-    return { f'top{n:02d}': acc for n, acc in zip(topns, topaccs) }
+    inspect_idx = tokenizer.vocab['f32'] # NOTE: allow for code resolution change
+    cl = model.bert.extra_embeddings.coef_learn[inspect_idx].item()
+    ce = model.bert.extra_embeddings.coef_extra[inspect_idx].item()
+    out['coef_learn'] = cl
+    out['coef_extra'] = ce
 
-def compute_metrics(eval_pred):
-    # TODO: these won't necessarily be positive, can they be contrained?
-    cl = model.bert.extra_embeddings.coef_learn.item()
-    ce = model.bert.extra_embeddings.coef_extra.item()
-    return {
-        'coef_learn': cl,
-        'coef_extra': ce,
-    }
+    return out
 
 trainer = Trainer(
     model=model,

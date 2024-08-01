@@ -23,9 +23,10 @@ class InjectEmbeddings(BertEmbeddings):
         # self.word_embeddings.weight.requires_grad_(False)
         # self.word_embeddings.weight[3:] = torch.from_numpy(extra_embeddings_data).float()[3:]
 
+        ntokens = len(self.extra_embeddings.weight)
         self.layer_norm_2 = nn.LayerNorm(self.LayerNorm.normalized_shape)
-        self.coef_learn = nn.Parameter(torch.tensor(0.5), requires_grad=True)
-        self.coef_extra = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+        self.coef_learn = nn.Parameter(torch.tensor([0.5]*ntokens), requires_grad=True)
+        self.coef_extra = nn.Parameter(torch.tensor([0.5]*ntokens), requires_grad=True)
 
     def forward(
         self,
@@ -62,6 +63,10 @@ class InjectEmbeddings(BertEmbeddings):
         embeddings = self.LayerNorm(embeddings)
 
         # NOTE: new
+        # NOTE: probably better to have a per token coef
+        # NOTE: even better, allow to be attended differently per token
+        #  External tokens may need to be passed separately to use attention
+        #  They can share positional embedding to indicate that they are the same observation?
         embeddings = self.coef_learn * embeddings + \
             self.coef_extra * self.layer_norm_2(self.extra_embeddings(input_ids))
 
