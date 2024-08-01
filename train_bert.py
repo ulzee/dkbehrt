@@ -9,12 +9,12 @@ parser.add_argument('--layers', type=int, default=4)
 parser.add_argument('--heads', type=int, default=4)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--embdim', type=int, default=192)
-parser.add_argument('--eval_batch_size', type=int, default=16)
+parser.add_argument('--eval_batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-5)
 parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--nowandb', action='store_true', default=False)
-parser.add_argument('--mask_ratio', type=float, default=0.15)
+parser.add_argument('--mask_ratio', type=float, default=0.5)
 parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--disable_visit_shuffle', action='store_true', default=False)
 args = parser.parse_args()
@@ -92,7 +92,7 @@ optimizer = torch.optim.AdamW(
 )
 # %%
 phase_ids = { phase: np.genfromtxt(f'artifacts/splits/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
-phase_ids['val'] = phase_ids['val'][::10][:512]
+# phase_ids['val'] = phase_ids['val'][::10]
 datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
@@ -101,6 +101,21 @@ datasets = { phase: utils.ICDDataset(
     max_length=512,
     shuffle_in_visit=False if args.disable_visit_shuffle else phase=='train',
 ) for phase, ids in phase_ids.items() }
+
+token_frequency = dict()
+for sample in datasets['val']:
+    for tkn in sample['input_ids']:
+        if tkn < 3: continue
+        c = token_frequency.get(tkn, 0)
+        token_frequency[tkn] = c + 1
+least_frequent = dict()
+tix, counts = list(zip(*token_frequency.items()))
+prev_cval = 10
+for cutoff in [50, 100, 200]:
+    cval = cutoff
+    least_frequent[f'least{cutoff}'] = [i for i, c in token_frequency.items() if c <= cval and c > prev_cval]
+    print(f'Tokens <{cutoff}:', len(least_frequent[f'least{cutoff}']))
+    prev_cval = cval
 
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
@@ -111,13 +126,14 @@ training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
+    eval_accumulation_steps=20,
     learning_rate=args.lr,
     num_train_epochs=args.epochs,
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
     run_name=mdlname,
-    eval_steps=200,
-    save_steps=1000,
+    eval_steps=100,
+    save_steps=500,
 )
 
 def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
@@ -137,6 +153,15 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
         inspect_idx = tokenizer.vocab['f32'] if 'f32' in tokenizer.vocab else tokenizer.vocab['f329']
         cl = model.bert.embeddings.coef_learn[inspect_idx].item()
         out['coef_learn'] = cl
+
+    logits = logits.cpu().numpy()
+    labels = labels.cpu().numpy()
+    for freqbin, tixs in least_frequent.items():
+        idict = { i: True for i in tixs }
+        where_bin = [i for i, l in enumerate(labels.astype(int).tolist()) if l in idict]
+        bin_accuracy = np.sum(np.argmax(logits[where_bin], -1) == labels[where_bin]) / len(where_bin)
+        out[freqbin+'_count'] = len(where_bin)
+        out[freqbin] = bin_accuracy
 
     return out
 
