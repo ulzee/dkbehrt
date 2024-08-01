@@ -116,7 +116,7 @@ training_args = TrainingArguments(
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
     run_name=mdlname,
-    eval_steps=500,
+    eval_steps=200,
     save_steps=1000,
 )
 
@@ -140,17 +140,17 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
 
     return out
 
-# class CustomCallback(TrainerCallback):
-#     def on_log(self, __args, state, control, logs=None, **kwargs):
-#         # super().on_log(**kwargs)
-#         if state.is_local_process_zero:
-#             if args.mode == 'emb':
-#                 coefs = model.bert.embeddings.coef_learn.detach().cpu().numpy()
-#                 hist = np.histogram(coefs)
-#                 # table = wandb.Table(data=[[i] for i in coefs], columns=["coef_learn"])
-#                 wandb.log({
-#                     'histogram-coef_learn': wandb.Histogram(np_histogram=hist)
-#                 })
+class CustomCallback(TrainerCallback):
+    def on_log(self, __args, state, control, logs=None, **kwargs):
+        # super().on_log(**kwargs)
+        if state.is_local_process_zero:
+            if args.mode == 'emb':
+                coefs = model.bert.embeddings.coef_learn.detach().cpu().numpy()
+                coefs = [[i] for i in coefs]
+                table = wandb.Table(data=coefs, columns=["coefs"])
+                wandb.log({
+                    'histogram-coef_learn': wandb.plot.histogram(table, "coefs", title="Embedding mixing coefficient")
+                })
 
 
 trainer = Trainer(
@@ -160,7 +160,7 @@ trainer = Trainer(
     train_dataset=datasets['train'],
     eval_dataset=datasets['val'],
     compute_metrics=compute_metrics,
-    # callbacks=[CustomCallback()]
+    callbacks=[CustomCallback()]
 )
 #%%
 trainer.evaluate()
