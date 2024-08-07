@@ -5,8 +5,8 @@ import os, sys
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='base')
 parser.add_argument('--use_embedding', type=str, default=None)
-parser.add_argument('--layers', type=int, default=4)
-parser.add_argument('--heads', type=int, default=4)
+parser.add_argument('--layers', type=int, default=1)
+parser.add_argument('--heads', type=int, default=1)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--embdim', type=int, default=192)
 parser.add_argument('--eval_batch_size', type=int, default=32)
@@ -92,7 +92,7 @@ optimizer = torch.optim.AdamW(
 )
 # %%
 phase_ids = { phase: np.genfromtxt(f'artifacts/splits/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
-# phase_ids['val'] = phase_ids['val'][::10]
+phase_ids['val'] = phase_ids['val'][::10]
 datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
@@ -126,13 +126,13 @@ training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
-    eval_accumulation_steps=20,
+    eval_accumulation_steps=10,
     learning_rate=args.lr,
     num_train_epochs=args.epochs,
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
     run_name=mdlname,
-    eval_steps=100,
+    eval_steps=500,
     save_steps=500,
 )
 
@@ -159,9 +159,11 @@ def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
     for freqbin, tixs in least_frequent.items():
         idict = { i: True for i in tixs }
         where_bin = [i for i, l in enumerate(labels.astype(int).tolist()) if l in idict]
-        bin_accuracy = np.sum(np.argmax(logits[where_bin], -1) == labels[where_bin]) / len(where_bin)
         out[freqbin+'_count'] = len(where_bin)
-        out[freqbin] = bin_accuracy
+        out[freqbin] = utils.topk_accuracy(
+            torch.from_numpy(logits[where_bin]),
+            torch.from_numpy(labels[where_bin]),
+            topk=[5])[0]
 
     return out
 
