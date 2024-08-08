@@ -34,7 +34,8 @@ from transformers import BertConfig, BertForMaskedLM, TrainerCallback
 from transformers.integrations import WandbCallback
 from transformers import AutoTokenizer, TrainingArguments, Trainer, DataCollatorForLanguageModeling
 from torch.utils.data import Dataset
-import embeddings
+import embedding
+import attention
 import utils
 import random, string
 run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
@@ -55,7 +56,7 @@ bertconfig = BertConfig(
 )
 model = BertForMaskedLM(bertconfig)
 #%%
-if args.mode == 'emb':
+if args.mode in ['emb', 'attn']:
     assert args.use_embedding is not None
     with open(args.use_embedding, 'rb') as fl:
         edict = pk.load(fl)
@@ -69,8 +70,8 @@ if args.mode == 'emb':
             template[i] = edict[w]
             nmatched += 1
     els = np.array(template).astype(np.float32)
-    els -= np.mean(els, axis=0)
-    els /= np.std(els, axis=0)
+    els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
+    # els /= np.std(els, axis=0)
 
     print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
 
@@ -78,10 +79,27 @@ if args.mode == 'emb':
         els = np.concatenate([els, np.zeros((len(els), bertconfig.hidden_size - els.shape[1]))], axis=1)
     else:
         raise 'Not handled'
-    model.bert.embeddings = embeddings.InjectEmbeddings(bertconfig, els, keep_training=False)
 
+    if args.mode == 'emb':
+        model.bert.embeddings = embedding.InjectEmbeddings(bertconfig, els, keep_training=False)
+    elif args.mode == 'attn':
+        # NOTE: some variables are wrapped in a non-module class to prevent issue
+        #  with safetensors trying to save duplicate (shared) variables
+
+        model.bert.embeddings = embedding.KeepInputEmbeddings(config=bertconfig)
+
+        embedding_dict_holder = embedding.NonTorchVariableHolder(
+            extra_embeddings=embedding.InjectEmbeddings(bertconfig, els, keep_training=False).extra_embeddings)
+
+        for layer in model.bert.encoder.layer:
+            layer.attention.self = attention.WeightedAttention(
+                config=bertconfig,
+                embeddings=embedding_dict_holder,
+                current_input=model.bert.embeddings.input_ids)
+
+        print('Attached weighted attention layers.')
 #%%
-if args.mode == 'emb':
+if args.mode in ['emb', 'attn']:
     # These are embeddings passed by the user, they should not be backpropd
     param_list = [t[1] for t in model.named_parameters() if 'extra_embeddings' not in t[0]]
 else:

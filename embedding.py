@@ -78,3 +78,27 @@ class InjectEmbeddings(BertEmbeddings):
 
         embeddings = self.dropout(embeddings)
         return embeddings
+
+class NonTorchVariableHolder:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class KeepInputEmbeddings(BertEmbeddings):
+    # A way to access the input_ids later by other modules
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.input_ids = NonTorchVariableHolder()
+
+    def forward(
+        self,
+        **kwargs
+    ) -> torch.Tensor:
+
+        out = BertEmbeddings.forward(self, **kwargs)
+
+        self.input_ids.input_ids = kwargs['input_ids']
+
+        return out
