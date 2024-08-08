@@ -23,8 +23,14 @@ class InjectEmbeddings(BertEmbeddings):
         # self.word_embeddings.weight.requires_grad_(False)
         # self.word_embeddings.weight[3:] = torch.from_numpy(extra_embeddings_data).float()[3:]
 
+        edim = self.word_embeddings.weight.shape[1]
         ntokens = len(self.extra_embeddings.weight)
         self.layer_norm_2 = nn.LayerNorm(self.LayerNorm.normalized_shape)
+        self.extra_emb_mlp = nn.Sequential(
+            nn.Linear(edim, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, edim)
+        )
         self.coef_learn = nn.Parameter(torch.tensor([0.5]*ntokens), requires_grad=True)
 
     def forward(
@@ -68,7 +74,7 @@ class InjectEmbeddings(BertEmbeddings):
         #  They can share positional embedding to indicate that they are the same observation?
         coefs = torch.sigmoid(self.coef_learn)
         embeddings = coefs[input_ids].unsqueeze(-1) * embeddings + \
-            (1-coefs)[input_ids].unsqueeze(-1) * self.layer_norm_2(self.extra_embeddings(input_ids))
+            (1-coefs)[input_ids].unsqueeze(-1) * self.layer_norm_2(self.extra_emb_mlp(self.extra_embeddings(input_ids)))
 
         embeddings = self.dropout(embeddings)
         return embeddings
