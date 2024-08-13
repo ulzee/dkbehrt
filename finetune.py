@@ -4,13 +4,16 @@ import os, sys
 #%%
 parser = argparse.ArgumentParser()
 parser.add_argument('--load', type=str, required=True)
+parser.add_argument('--scratch', action='store_true', default=False)
+parser.add_argument('--freeze', action='store_true', default=False)
 parser.add_argument('--task', type=str, required=True)
 parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--epochs', type=int, default=50)
-parser.add_argument('--batch_size', type=int, default=64)
-parser.add_argument('--eval_batch_size', type=int, default=32)
-parser.add_argument('--lr', type=float, default=1e-5)
+parser.add_argument('--batch_size', type=int, default=256)
+parser.add_argument('--eval_batch_size', type=int, default=128)
+parser.add_argument('--eval_steps', type=int, default=20)
+parser.add_argument('--lr', type=float, default=1e-4)
 parser.add_argument('--disable_visible_devices', action='store_true', default=False)
 parser.add_argument('--subsample', type=int, default=None)
 parser.add_argument('--ehr_outcomes_path', type=str, default='../ehr-outcomes')
@@ -50,6 +53,9 @@ with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
 tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
 #%%
 model = BertForSequenceClassification.from_pretrained(args.load, num_labels=2)
+
+if args.scratch:
+    model = BertForSequenceClassification(model.config)
 #%%
 
 # either base bert approach or a custom model
@@ -80,8 +86,9 @@ datasets = { phase: utils.EHROutcomesDataset(
 ) for phase, ids in phase_ids.items() }
 
 loaded_name = args.load.split('/')[-2]
+scratchtag = ('pretrained_frozen-' if args.freeze else 'pretrained-') if not args.scratch else f'scratch-'
 subtag = '' if args.subsample is None else f'sub{args.subsample}-'
-mdlname = f'ft-{subtag}{args.task}-{loaded_name}'
+mdlname = f'ft-{subtag}{scratchtag}{args.task}-ftlr{args.lr}-{loaded_name}'
 print(mdlname)
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
@@ -93,7 +100,7 @@ training_args = TrainingArguments(
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
     run_name=mdlname,
-    eval_steps=100,
+    eval_steps=args.eval_steps,
     save_steps=2000,
 )
 
@@ -119,6 +126,12 @@ class CustomCallback(TrainerCallback):
         if state.is_local_process_zero:
             # any custom logging
             pass
+
+if args.freeze:
+    train_params = ['bert.pooler.dense.bias', 'bert.pooler.dense.weight', 'classifier.bias', 'classifier.weight']
+    for name, param in model.named_parameters():
+        if name not in train_params:
+            param.requires_grad = False
 
 trainer = Trainer(
     model=model,
