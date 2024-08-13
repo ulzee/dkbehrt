@@ -3,6 +3,9 @@ import torch
 from torch.utils.data import Dataset
 import numpy as np
 from random import shuffle
+import pickle as pk
+import pandas as pd
+from tqdm import tqdm
 
 def gather_hidden_params(mdl):
 
@@ -39,7 +42,6 @@ class ICDDataset(Dataset):
     def __len__(self):
         return len(self.pids)
     def __getitem__(self, i):
-        # FIXME: code cutoff id diagnoses file?
         concepts = self.dxs[self.pids[i]]['codes']['concepts']
         visits = self.dxs[self.pids[i]]['codes']['visits']
         vid = visits[0]
@@ -68,6 +70,45 @@ class ICDDataset(Dataset):
             code_series, padding=True,
             truncation=self.max_length is not None,
             max_length=self.max_length).items()  if k not in ['token_type_ids']}
+
+class EHROutcomesDataset(Dataset):
+    def __init__(self, ehr_outcomes_path, tokenizer, patient_ids, code_resolution, separator='[SEP]', max_length=None, shuffle_in_visit=True):
+        with open(f'{ehr_outcomes_path}/saved/dx.pk', 'rb') as fl:
+            self.dxs = pk.load(fl)
+        self.stays = pd.read_csv(f'{ehr_outcomes_path}/saved/targets_by_icustay.csv')
+        self.shuffle_in_visit = shuffle_in_visit
+        self.tokenizer = tokenizer
+        self.separator = separator
+        self.code_resolution = code_resolution
+        self.max_length = max_length
+
+        pdict = { i: True for i in patient_ids }
+        self.pids = [i for i in self.stays['subject_id'].unique() if i in pdict]
+        self.stays = self.stays.set_index('subject_id').loc[self.pids].reset_index()
+        self.history = [[[c[:code_resolution].lower() for c in self.dxs[h] if type(c) == str] if h in self.dxs else [] for h in eval(hids)] for hids in tqdm(self.stays['past_visits'])]
+        self.labels = self.stays['mortality'].values.tolist()
+
+    def __len__(self):
+        return len(self.stays)
+
+    def __getitem__(self, i):
+
+        code_series = ''
+        byvisit = self.history[i]
+        for vi, cinv in enumerate(byvisit):
+            if self.shuffle_in_visit:
+                shuffle(cinv)
+            for c in cinv:
+                code_series += f' {c}'
+            if vi != len(byvisit) - 1: code_series += f' {self.separator}'
+
+        item = { k: v for k, v in self.tokenizer(
+            code_series, padding=True,
+            truncation=self.max_length is not None,
+            max_length=self.max_length).items()  if k not in ['token_type_ids']}
+        item['labels'] = [[1.0, 0.0], [0.0, 1.0]][self.labels[i]]
+
+        return item
 
 def topk_accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""

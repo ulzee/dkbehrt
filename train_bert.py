@@ -113,6 +113,7 @@ if args.mode in ['emb', 'attn']:
 
         print('Attached weighted attention layers.')
 #%%
+# FIXME: this is not used at all? baselines need to be rerun
 if args.mode in ['emb', 'attn']:
     # These are embeddings passed by the user, they should not be backpropd
     param_list = [t[1] for t in model.named_parameters() if 'extra_embeddings' not in t[0]]
@@ -123,7 +124,7 @@ optimizer = torch.optim.AdamW(
     lr=args.lr,
 )
 # %%
-phase_ids = { phase: np.genfromtxt(f'artifacts/splits/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
+phase_ids = { phase: np.genfromtxt(f'files/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 phase_ids['val'] = phase_ids['val'][::10]
 datasets = { phase: utils.ICDDataset(
     dxs,
