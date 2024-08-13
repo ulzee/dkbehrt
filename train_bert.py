@@ -17,6 +17,7 @@ parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--mask_ratio', type=float, default=0.5)
 parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--disable_visit_shuffle', action='store_true', default=False)
+parser.add_argument('--disable_visible_devices', action='store_true', default=False)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
@@ -25,7 +26,10 @@ if not args.nowandb:
     import wandb
 else:
     os.environ['WANDB_DISABLED'] = 'true'
-os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
+if not args.disable_visible_devices:
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
+# else:
+#     torch.cuda_set_device(int(os.environ['CUDA_VISIBLE_DEVICES']))
 import torch
 import torch.nn as nn
 import pickle as pk
@@ -58,38 +62,48 @@ model = BertForMaskedLM(bertconfig)
 #%%
 if args.mode in ['emb', 'attn']:
     assert args.use_embedding is not None
-    with open(args.use_embedding, 'rb') as fl:
-        edict = pk.load(fl)
-    edim = len(next(iter(edict.values())))
 
-    template = np.zeros((len(tokenizer.vocab), edim))
-    nmatched = 0
-    for w, i in tokenizer.vocab.items():
-        w = w.upper()
-        if w in edict:
-            template[i] = edict[w]
-            nmatched += 1
-    els = np.array(template).astype(np.float32)
-    els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
-    # els /= np.std(els, axis=0)
-
-    print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
-
-    if els.shape[1] <= bertconfig.hidden_size:
-        els = np.concatenate([els, np.zeros((len(els), bertconfig.hidden_size - els.shape[1]))], axis=1)
+    els = None
+    if args.use_embedding == 'zeros':
+        els = np.zeros((len(tokenizer.vocab), 100))
+        print(f'Loading all-zero embeddings (for debugging)')
     else:
-        raise 'Not handled'
+        with open(args.use_embedding, 'rb') as fl:
+            edict = pk.load(fl)
+        edim = len(next(iter(edict.values())))
+
+        template = np.zeros((len(tokenizer.vocab), edim))
+        nmatched = 0
+        for w, i in tokenizer.vocab.items():
+            w = w.upper()
+            if w in edict:
+                template[i] = edict[w]
+                nmatched += 1
+        els = np.array(template).astype(np.float32)
+        els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
+        # els /= np.std(els, axis=0)
+
+        print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
+
 
     if args.mode == 'emb':
+        if els.shape[1] <= bertconfig.hidden_size:
+            els = np.concatenate([els, np.zeros((len(els), bertconfig.hidden_size - els.shape[1]))], axis=1)
+        else:
+            raise 'Not handled'
+
         model.bert.embeddings = embedding.InjectEmbeddings(bertconfig, els, keep_training=False)
+
     elif args.mode == 'attn':
         # NOTE: some variables are wrapped in a non-module class to prevent issue
         #  with safetensors trying to save duplicate (shared) variables
 
         model.bert.embeddings = embedding.KeepInputEmbeddings(config=bertconfig)
 
+        extra_embeddings = nn.Embedding(*els.shape)
+        extra_embeddings.weight = nn.Parameter(torch.from_numpy(els.astype(np.float32)).cuda(), requires_grad=False)
         embedding_dict_holder = embedding.NonTorchVariableHolder(
-            extra_embeddings=embedding.InjectEmbeddings(bertconfig, els, keep_training=False).extra_embeddings)
+            extra_embeddings=extra_embeddings)
 
         for layer in model.bert.encoder.layer:
             layer.attention.self = attention.WeightedAttention(
@@ -144,14 +158,14 @@ training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
-    eval_accumulation_steps=10,
+    eval_accumulation_steps=15,
     learning_rate=args.lr,
     num_train_epochs=args.epochs,
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
     run_name=mdlname,
-    eval_steps=500,
-    save_steps=500,
+    eval_steps=2000,
+    save_steps=2000,
 )
 
 def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):
