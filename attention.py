@@ -78,11 +78,15 @@ def weighted_scaled_dot_product_attention(
         if attn_mask.dtype == torch.bool:
             attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
         else:
-            # attn_bias += attn_mask
+            # attn_bias += attn_mask # NOTE: fixed below for broadcasting, maybe a version issue?
             attn_bias = attn_bias.unsqueeze(0).unsqueeze(0).to(query.device) + attn_mask
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
     attn_weight += attn_bias
-    attn_weight = torch.softmax(weighting_matrix.unsqueeze(1), dim=-1)
+
+    # NOTE: NEW
+    attn_weight += weighting_matrix.unsqueeze(1)
+
+    attn_weight = torch.softmax(attn_weight, dim=-1)
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     return attn_weight @ value
 
@@ -93,6 +97,14 @@ class WeightedAttention(BertSelfAttention):
         self.require_contiguous_qkv = version.parse(get_torch_version()) < version.parse("2.2.0")
         self.embeddings = embeddings
         self.current_input = current_input
+
+        edim = self.embeddings.extra_embeddings.weight.shape[1]
+        self.emb_mlp = nn.Linear(edim, edim)
+        # self.emb_mlp = nn.Sequential(
+        #     nn.Linear(edim, edim//2),
+        #     nn.ReLU(),
+        #     nn.Linear(edim//2, edim)
+        # )
 
     def forward(
         self,
@@ -148,7 +160,8 @@ class WeightedAttention(BertSelfAttention):
         # NOTE: New
         user_embs = self.embeddings.extra_embeddings.to(
             self.current_input.input_ids.device)(self.current_input.input_ids)
-        emb_sim = torch.matmul(user_embs, user_embs.transpose(1, 2))
+        user_embs_mlp = self.emb_mlp(user_embs)
+        emb_sim = torch.matmul(user_embs_mlp, user_embs_mlp.transpose(1, 2))
         attn_output = weighted_scaled_dot_product_attention(
             query_layer,
             key_layer,
