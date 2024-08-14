@@ -13,7 +13,7 @@ parser.add_argument('--epochs', type=int, default=50)
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--eval_batch_size', type=int, default=128)
 parser.add_argument('--eval_steps', type=int, default=20)
-parser.add_argument('--lr', type=float, default=1e-4)
+parser.add_argument('--lr', type=float, default=5e-4)
 parser.add_argument('--disable_visible_devices', action='store_true', default=False)
 parser.add_argument('--subsample', type=int, default=None)
 parser.add_argument('--ehr_outcomes_path', type=str, default='../ehr-outcomes')
@@ -47,31 +47,53 @@ import evaluate
 metric = evaluate.load("accuracy")
 run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 #%%
+model_mode = args.load.split('/')[-2].split('-')[1] # expects model_name/checkpoint_num folders
+#%%
 with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
 tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
 #%%
 model = BertForSequenceClassification.from_pretrained(args.load, num_labels=2)
+if model_mode == 'base':
+    if args.scratch:
+        model = BertForSequenceClassification(model.config)
+elif model_mode == 'attn':
 
-if args.scratch:
+    # load embeddings
+    use_embedding = '../data/icd10/embeddings/kane/biogpt100_collated.pk'
+    with open(use_embedding, 'rb') as fl:
+        edict = pk.load(fl)
+    edim = len(next(iter(edict.values())))
+
+    template = np.zeros((len(tokenizer.vocab), edim))
+    nmatched = 0
+    for w, i in tokenizer.vocab.items():
+        w = w.upper()
+        if w in edict:
+            template[i] = edict[w]
+            nmatched += 1
+    els = np.array(template).astype(np.float32)
+    els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
+
+    # reset the model for now
     model = BertForSequenceClassification(model.config)
-#%%
+    bertconfig = model.config
+    model.bert.embeddings = embedding.KeepInputEmbeddings(config=bertconfig)
 
-# either base bert approach or a custom model
-model_mode = args.load.split('/')[-2].split('-')[1] # expects model_name/checkpoint_num folders
+    extra_embeddings = nn.Embedding(*els.shape)
+    extra_embeddings.weight = nn.Parameter(torch.from_numpy(els.astype(np.float32)).cuda(), requires_grad=False)
+    embedding_dict_holder = embedding.NonTorchVariableHolder(
+        extra_embeddings=extra_embeddings)
+
+    for layer in model.bert.encoder.layer:
+        layer.attention.self = attention.WeightedAttention(
+            config=bertconfig,
+            embeddings=embedding_dict_holder,
+            current_input=model.bert.embeddings.input_ids)
+
+    print('Attached weighted attention layers.')
 #%%
-# FIXME: this is not used at all?
-if model_mode in ['emb', 'attn']:
-    # These are embeddings passed by the user, they should not be backpropd
-    param_list = [t[1] for t in model.named_parameters() if 'extra_embeddings' not in t[0]]
-else:
-    param_list = list(model.parameters())
-optimizer = torch.optim.AdamW(
-    param_list,
-    lr=args.lr,
-)
-# %%
 phase_ids = { phase: np.genfromtxt(f'files/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 if args.subsample is not None:
     phase_ids['train'] = phase_ids['train'][::args.subsample]

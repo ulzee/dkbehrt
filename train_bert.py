@@ -112,13 +112,7 @@ if args.mode in ['emb', 'attn']:
                 current_input=model.bert.embeddings.input_ids)
 
         print('Attached weighted attention layers.')
-#%%
-# FIXME: this is not used at all? baselines need to be rerun
-if args.mode in ['emb', 'attn']:
-    # These are embeddings passed by the user, they should not be backpropd
-    param_list = [t[1] for t in model.named_parameters() if 'extra_embeddings' not in t[0]]
-else:
-    param_list = list(model.parameters())
+
 # %%
 phase_ids = { phase: np.genfromtxt(f'files/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 phase_ids['val'] = phase_ids['val'][::10]
@@ -150,7 +144,7 @@ data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
-mdlname = f'bert-{args.mode}-cr{args.code_resolution}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
+mdlname = f'bert-{args.mode}-cr{args.code_resolution}-lr{args.lr}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
@@ -207,7 +201,7 @@ class CustomCallback(TrainerCallback):
                 wandb.log({
                     'histogram-coef_learn': wandb.plot.histogram(table, "coefs", title="Embedding mixing coefficient")
                 })
-
+        torch.save(model.state_dict(), f'saved/{mdlname}.pth')
 
 trainer = Trainer(
     model=model,
@@ -222,5 +216,4 @@ trainer = Trainer(
 trainer.evaluate()
 trainer.train()
 # %%
-torch.save(model.state_dict(), 'saved/bert_basic.pth')
 # %%
