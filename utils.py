@@ -72,21 +72,28 @@ class ICDDataset(Dataset):
             max_length=self.max_length).items()  if k not in ['token_type_ids']}
 
 class EHROutcomesDataset(Dataset):
-    def __init__(self, ehr_outcomes_path, tokenizer, patient_ids, code_resolution, separator='[SEP]', max_length=None, shuffle_in_visit=True):
+    def __init__(self, task, ehr_outcomes_path, tokenizer, patient_ids, code_resolution, covs=None, separator='[SEP]', max_length=None, shuffle_in_visit=True):
         with open(f'{ehr_outcomes_path}/saved/dx.pk', 'rb') as fl:
             self.dxs = pk.load(fl)
-        self.stays = pd.read_csv(f'{ehr_outcomes_path}/saved/targets_by_icustay.csv')
+
+        if task in ['mortality', 'los72']:
+            self.stays = pd.read_csv(f'{ehr_outcomes_path}/saved/targets_by_icustay.csv')
+        else:
+            self.stays = pd.read_csv(f'{ehr_outcomes_path}/saved/targets_diagnosis_{task}.csv')
+
         self.shuffle_in_visit = shuffle_in_visit
         self.tokenizer = tokenizer
         self.separator = separator
         self.code_resolution = code_resolution
         self.max_length = max_length
+        self.covs = covs
+        self.task = task
 
         pdict = { i: True for i in patient_ids }
         self.pids = [i for i in self.stays['subject_id'].unique() if i in pdict]
         self.stays = self.stays.set_index('subject_id').loc[self.pids].reset_index()
         self.history = [[[c[:code_resolution].lower() for c in self.dxs[h] if type(c) == str] if h in self.dxs else [] for h in eval(hids)] for hids in tqdm(self.stays['past_visits'])]
-        self.labels = self.stays['mortality'].values.tolist()
+        self.labels = self.stays[task].values.tolist()
 
     def __len__(self):
         return len(self.stays)
