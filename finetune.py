@@ -10,18 +10,20 @@ parser.add_argument('--task', type=str, required=True)
 parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--epochs', type=int, default=50)
-parser.add_argument('--batch_size', type=int, default=256)
-parser.add_argument('--eval_batch_size', type=int, default=128)
-parser.add_argument('--eval_steps', type=int, default=20)
+parser.add_argument('--batch_size', type=int, default=192)
+parser.add_argument('--eval_batch_size', type=int, default=64)
+parser.add_argument('--eval_steps', type=int, default=50)
 parser.add_argument('--lr', type=float, default=5e-4)
 parser.add_argument('--disable_visible_devices', action='store_true', default=False)
 parser.add_argument('--subsample', type=int, default=None)
 parser.add_argument('--ehr_outcomes_path', type=str, default='../ehr-outcomes')
 parser.add_argument('--nowandb', action='store_true', default=False)
+parser.add_argument('--predict', action='store_true', default=False)
+parser.add_argument('--predict_set', default='test', type=str)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
-    os.environ["WANDB_PROJECT"] = "ehr-outcomes"
+    os.environ["WANDB_PROJECT"] = f'ehr-outcomes-{args.task}'
     os.environ["WANDB_LOG_MODEL"] = "end"
     import wandb
 else:
@@ -54,6 +56,12 @@ with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
 #%%
 tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
 #%%
+loaded_name = args.load.split('/')[-2]
+scratchtag = ('pretrained_frozen-' if args.freeze else 'pretrained-') if not args.scratch else f'scratch-'
+subtag = '' if args.subsample is None else f'sub{args.subsample}-'
+mdlname = f'ft-{subtag}{scratchtag}{args.task}-ftlr{args.lr}-{loaded_name}'
+print(mdlname)
+
 model = BertForSequenceClassification.from_pretrained(args.load, num_labels=2)
 if model_mode == 'base':
     if args.scratch:
@@ -61,7 +69,8 @@ if model_mode == 'base':
 elif model_mode == 'attn':
 
     # load embeddings
-    use_embedding = '../data/icd10/embeddings/kane/biogpt100_collated.pk'
+    # use_embedding = '../data/icd10/embeddings/kane/biogpt100_collated.pk'
+    use_embedding = '../data/icd10/embeddings/hug/microsoft--biogpt_hidden_collated.pk'
     with open(use_embedding, 'rb') as fl:
         edict = pk.load(fl)
     edim = len(next(iter(edict.values())))
@@ -93,12 +102,27 @@ elif model_mode == 'attn':
             current_input=model.bert.embeddings.input_ids)
 
     print('Attached weighted attention layers.')
+
+    if not args.scratch:
+        model.load_state_dict(torch.load(f'saved/{loaded_name}.pth'), strict=False)
+        # NOTE: until we can figure out a way to make hug trainer save custom models, we need to load from a state dict
 #%%
 phase_ids = { phase: np.genfromtxt(f'files/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 if args.subsample is not None:
     phase_ids['train'] = phase_ids['train'][::args.subsample]
-phase_ids['val'] = phase_ids['val'][::10]
+if not args.predict:
+    # reduce val set to not slow down training
+    phase_ids['val'] = phase_ids['val'][::10]
+
+# FIXME: are the ids not shuffled well?
+
+val_ids = phase_ids['val']
+test_ids = phase_ids['test']
+phase_ids['val'] = val_ids[:len(val_ids)//2].tolist() + test_ids[:len(test_ids)//2].tolist()
+phase_ids['test'] = val_ids[len(val_ids)//2:].tolist() + test_ids[len(test_ids)//2:].tolist()
+
 datasets = { phase: utils.EHROutcomesDataset(
+    args.task,
     args.ehr_outcomes_path,
     tokenizer,
     ids,
@@ -107,11 +131,6 @@ datasets = { phase: utils.EHROutcomesDataset(
     shuffle_in_visit=phase=='train',
 ) for phase, ids in phase_ids.items() }
 
-loaded_name = args.load.split('/')[-2]
-scratchtag = ('pretrained_frozen-' if args.freeze else 'pretrained-') if not args.scratch else f'scratch-'
-subtag = '' if args.subsample is None else f'sub{args.subsample}-'
-mdlname = f'ft-{subtag}{scratchtag}{args.task}-ftlr{args.lr}-{loaded_name}'
-print(mdlname)
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
@@ -132,22 +151,34 @@ def compute_metrics(eval_pred):
     predictions = np.argmax(logits, axis=-1)
 
     accuracy = (predictions == pos_labels).sum() / len(predictions)
-    roc = roc_auc_score(pos_labels, predictions)
-    ap = average_precision_score(pos_labels, predictions)
-    f1 = f1_score(pos_labels > 0.5, predictions)
+
+    probs = torch.sigmoid(torch.from_numpy(logits[:, 1])).numpy()
+    roc = roc_auc_score(pos_labels, probs)
+    ap = average_precision_score(pos_labels, probs)
+    f1 = f1_score(pos_labels, probs > 0.5, average='macro')
+
+    unique_preds = len(np.unique(logits[:, 1]))
 
     return dict(
         accuracy=accuracy,
         pr=ap,
         roc=roc,
         f1=f1,
+        unique_preds=unique_preds,
     )
 
 class CustomCallback(TrainerCallback):
+
+    best_loss = None
+
     def on_log(self, __args, state, control, logs=None, **kwargs):
         if state.is_local_process_zero:
             # any custom logging
-            pass
+            if 'eval_loss' in logs:
+                if self.best_loss is None or self.best_loss > logs['eval_loss']:
+                    self.best_loss = logs['eval_loss']
+
+                    torch.save(model.state_dict(), f'saved/best_{mdlname}.pth')
 
 if args.freeze:
     train_params = ['bert.pooler.dense.bias', 'bert.pooler.dense.weight', 'classifier.bias', 'classifier.weight']
@@ -155,18 +186,64 @@ if args.freeze:
         if name not in train_params:
             param.requires_grad = False
 
-trainer = Trainer(
-    model=model,
-    tokenizer=tokenizer,
-    args=training_args,
-    train_dataset=datasets['train'],
-    eval_dataset=datasets['val'],
-    compute_metrics=compute_metrics,
-    callbacks=[CustomCallback()]
-)
 #%%
-trainer.evaluate()
-trainer.train()
-# %%
-torch.save(model.state_dict(), f'saved/{mdlname}.pth')
+if not args.predict:
+    trainer = Trainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=datasets['train'],
+        eval_dataset=datasets['val'],
+        compute_metrics=compute_metrics,
+        callbacks=[CustomCallback()]
+    )
+
+    trainer.evaluate()
+    trainer.train()
+else:
+    if args.task in ['mortality', 'los72']:
+        with open(f'../ehr-outcomes/files/boot_ixs.pk', 'rb') as fl:
+            boot_ixs = pk.load(fl)
+    else:
+        with open(f'../ehr-outcomes/files/boot_ixs_{args.task}.pk', 'rb') as fl:
+            boot_ixs = pk.load(fl)
+
+    def get_boot_metrics(ypred):
+        ls = []
+        for bxs in boot_ixs:
+            ytrue = np.array(datasets[args.predict_set].labels)
+            ls += [[
+                average_precision_score(ytrue[bxs], ypred[bxs]),
+                roc_auc_score(ytrue[bxs], ypred[bxs]),
+                f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='weighted'),
+            ]]
+
+        out = ''
+        for tag, replicates in zip(['ap', 'roc', 'f1'], zip(*ls)):
+            est = np.mean(replicates)
+            ci = 1.95*np.std(replicates)
+            out += f'{tag}:{est:.3f} ({ci:.3f}) '
+
+        print(out)
+
+
+    model.load_state_dict(torch.load(f'saved/best_{mdlname}.pth'))
+    tester = Trainer(
+        model=model,
+        tokenizer=tokenizer,
+        args=training_args,
+        train_dataset=None,
+        eval_dataset=None,
+    )
+    preds = tester.predict(datasets[args.predict_set])
+
+    class_proba = torch.sigmoid(torch.from_numpy(preds.predictions[:, 1]))
+
+    get_boot_metrics(class_proba)
+
+    # for met in [roc_auc_score, average_precision_score, f1_score]:
+    #     if met == f1_score:
+    #         print(str(met), met(datasets[args.predict_set].labels, class_proba > 0.5))
+    #     else:
+    #         print(str(met), met(datasets[args.predict_set].labels, class_proba))
 # %%
