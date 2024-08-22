@@ -116,13 +116,6 @@ if not args.predict:
     # reduce val set to not slow down training
     phase_ids['val'] = phase_ids['val'][::args.val_subsample]
 
-
-
-val_ids = phase_ids['val']
-test_ids = phase_ids['test']
-phase_ids['val'] = val_ids[:len(val_ids)//2].tolist() + test_ids[:len(test_ids)//2].tolist()
-phase_ids['test'] = val_ids[len(val_ids)//2:].tolist() + test_ids[len(test_ids)//2:].tolist()
-
 datasets = { phase: utils.EHROutcomesDataset(
     args.task,
     args.ehr_outcomes_path,
@@ -176,11 +169,11 @@ class CustomCallback(TrainerCallback):
     def on_log(self, __args, state, control, logs=None, **kwargs):
         if state.is_local_process_zero:
             # any custom logging
-            if 'eval_loss' in logs:
-                if self.best_loss is None or self.best_loss > logs['eval_loss']:
-                    self.best_loss = logs['eval_loss']
+            if 'eval_val_loss' in logs:
+                if self.best_loss is None or self.best_loss > logs['eval_val_loss']:
+                    self.best_loss = logs['eval_val_loss']
 
-                    print('saved ckpt:', logs['eval_loss'])
+                    print('saved ckpt:', logs['eval_val_loss'])
                     torch.save(model.state_dict(), f'saved/best_{mdlname}.pth')
 
 if args.freeze:
@@ -214,7 +207,7 @@ else:
     def get_boot_metrics(ypred):
         ls = []
         ytrue = np.array(datasets[args.predict_set].labels)
-        for bxs in boot_ixs:
+        for bxs in [list(range(len(ytrue)))] + boot_ixs[:10]:
             ls += [[
                 average_precision_score(ytrue[bxs], ypred[bxs]),
                 roc_auc_score(ytrue[bxs], ypred[bxs]),
@@ -223,7 +216,7 @@ else:
 
         out = ''
         for tag, replicates in zip(['ap', 'roc', 'f1'], zip(*ls)):
-            est = np.mean(replicates)
+            est, replicates = replicates[0], replicates[1:]
             ci = 1.95*np.std(replicates)
             out += f'{tag}:{est:.3f} ({ci:.3f}) '
 
