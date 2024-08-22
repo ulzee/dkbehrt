@@ -20,6 +20,8 @@ parser.add_argument('--ehr_outcomes_path', type=str, default='../ehr-outcomes')
 parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--predict', action='store_true', default=False)
 parser.add_argument('--predict_set', default='test', type=str)
+parser.add_argument('--val_subsample', default=10, type=int)
+parser.add_argument('--eval_test', default=False, action='store_true')
 args = parser.parse_args()
 #%%
 if not args.nowandb:
@@ -112,9 +114,9 @@ if args.subsample is not None:
     phase_ids['train'] = phase_ids['train'][::args.subsample]
 if not args.predict:
     # reduce val set to not slow down training
-    phase_ids['val'] = phase_ids['val'][::10]
+    phase_ids['val'] = phase_ids['val'][::args.val_subsample]
 
-# FIXME: are the ids not shuffled well?
+
 
 val_ids = phase_ids['val']
 test_ids = phase_ids['test']
@@ -178,6 +180,7 @@ class CustomCallback(TrainerCallback):
                 if self.best_loss is None or self.best_loss > logs['eval_loss']:
                     self.best_loss = logs['eval_loss']
 
+                    print('saved ckpt:', logs['eval_loss'])
                     torch.save(model.state_dict(), f'saved/best_{mdlname}.pth')
 
 if args.freeze:
@@ -193,7 +196,7 @@ if not args.predict:
         tokenizer=tokenizer,
         args=training_args,
         train_dataset=datasets['train'],
-        eval_dataset=datasets['val'],
+        eval_dataset={ ph: datasets[ph] for ph in ['val'] + [[], ['test']][args.eval_test]},
         compute_metrics=compute_metrics,
         callbacks=[CustomCallback()]
     )
@@ -210,12 +213,12 @@ else:
 
     def get_boot_metrics(ypred):
         ls = []
+        ytrue = np.array(datasets[args.predict_set].labels)
         for bxs in boot_ixs:
-            ytrue = np.array(datasets[args.predict_set].labels)
             ls += [[
                 average_precision_score(ytrue[bxs], ypred[bxs]),
                 roc_auc_score(ytrue[bxs], ypred[bxs]),
-                f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='weighted'),
+                f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='macro'),
             ]]
 
         out = ''
