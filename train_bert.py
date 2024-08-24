@@ -174,6 +174,7 @@ data_collator = CustomDataCollatorForLanguageModeling(
 )
 
 mdlname = f'bert-{args.mode}-cr{args.code_resolution}-lr{args.lr}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
+print(mdlname)
 training_args = TrainingArguments(
     output_dir=f'runs/{mdlname}',
     per_device_train_batch_size=args.batch_size,
@@ -230,7 +231,14 @@ class CustomCallback(TrainerCallback):
                 wandb.log({
                     'histogram-coef_learn': wandb.plot.histogram(table, "coefs", title="Embedding mixing coefficient")
                 })
-            torch.save(model.state_dict(), f'saved/{mdlname}.pth')
+
+            if state.global_step > 0:
+                ckpt_path = f'runs/{mdlname}/checkpoint-{state.global_step}'
+                if not os.path.exists(ckpt_path):
+                    os.mkdir(ckpt_path)
+                torch.save(
+                    model.state_dict(),
+                    f'{ckpt_path}/weights.pth')
 
 trainer = Trainer(
     model=model,
