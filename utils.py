@@ -31,16 +31,19 @@ mf = lambda c: f'{c/1000/1000:.1f}M'
 bf = lambda c: f'{c/1000/1000/1000:.1f}B'
 
 class ICDDataset(Dataset):
-    def __init__(self, dxs, tokenizer, patient_ids, separator, max_length=None, shuffle_in_visit=True):
+    def __init__(self, dxs, tokenizer, patient_ids, covs, separator, max_length=None, shuffle_in_visit=True):
         self.dxs = dxs
         self.shuffle_in_visit = shuffle_in_visit
         self.max_length = max_length
+        self.covs = covs
         self.tokenizer = tokenizer
         self.separator = separator
         pdict = { i: True for i in patient_ids }
         self.pids = [i for i in dxs if i in pdict]
+
     def __len__(self):
         return len(self.pids)
+
     def __getitem__(self, i):
         concepts = self.dxs[self.pids[i]]['codes']['concepts']
         visits = self.dxs[self.pids[i]]['codes']['visits']
@@ -48,28 +51,40 @@ class ICDDataset(Dataset):
 
         byvisit = []
         cinv = []
-        vid = visits[0]
+        current_v = visits[0]
         for c, v in zip(concepts, visits):
-            if v != vid:
-                vid = v
-                byvisit += [cinv]
+            if v != current_v:
+                byvisit += [(current_v, cinv)]
+                current_v = v
                 cinv = []
             cinv += [c]
         if len(cinv):
-            byvisit += [cinv]
+            byvisit += [(current_v, cinv)]
 
         code_series = ''
-        for vi, cinv in enumerate(byvisit):
+        if self.covs is not None: cov_hist = []
+        for vi, (vid, cinv) in enumerate(byvisit):
             if self.shuffle_in_visit:
                 shuffle(cinv)
             for c in cinv:
                 code_series += f' {c}'
-            if vi != len(byvisit) - 1: code_series += f' {self.separator}'
+                if self.covs is not None: cov_hist += [self.covs[vid]]
+            if vi != len(byvisit) - 1:
+                code_series += f' {self.separator}'
+                if self.covs is not None: cov_hist += [self.covs[None]]
 
-        return { k: v for k, v in self.tokenizer(
+        sample = { k: v for k, v in self.tokenizer(
             code_series, padding=True,
             truncation=self.max_length is not None,
             max_length=self.max_length).items()  if k not in ['token_type_ids']}
+
+        if self.covs is not None:
+            blank_cov = [self.covs[None]]
+            if self.max_length is not None:
+                cov_hist = cov_hist[:self.max_length-2]
+            sample['position_ids'] = blank_cov + cov_hist + blank_cov # matches tokenizer pad
+
+        return sample
 
 class EHROutcomesDataset(Dataset):
     def __init__(self, task, ehr_outcomes_path, tokenizer, patient_ids, code_resolution, covs=None, separator='[SEP]', max_length=None, shuffle_in_visit=True):

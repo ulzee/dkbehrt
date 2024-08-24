@@ -18,10 +18,11 @@ parser.add_argument('--mask_ratio', type=float, default=0.5)
 parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--disable_visit_shuffle', action='store_true', default=False)
 parser.add_argument('--disable_visible_devices', action='store_true', default=False)
+parser.add_argument('--covariates', default='gender,age', type=str)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
-    os.environ["WANDB_PROJECT"] = "icd"
+    os.environ["WANDB_PROJECT"] = "icdbert"
     os.environ["WANDB_LOG_MODEL"] = "end"
     import wandb
 else:
@@ -37,8 +38,11 @@ import numpy as np
 from transformers import BertConfig, BertForMaskedLM, TrainerCallback
 from transformers.integrations import WandbCallback
 from transformers import AutoTokenizer, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+import collator
+from collator import CustomDataCollatorForLanguageModeling
 from torch.utils.data import Dataset
 import embedding
+import pandas as pd
 import attention
 import utils
 import random, string
@@ -47,7 +51,31 @@ run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
+cdf = pd.read_csv('saved/cov.csv')
+covs = dict()
+def format_covs_as_position(covls):
+    flip_factor = 1
+    pos_value = 0.01
+    for cv, cname in zip(covls, args.covariates.split(',')):
+        if cname == 'gender':
+            if cv in 'MF':
+                flip_factor = [-1, 1]['MF'.index(cv)]
+            else:
+                raise Exception('Not supported')
+        elif cname == 'age':
+            pos_value = cv/100/100
+        else:
+            print('WARN: unknown covariate')
+    return flip_factor * pos_value
+
+for sample_covs in zip(*([cdf['hadm_id']] + [cdf[c] for c in args.covariates.split(',')])):
+    sid, use_covs = sample_covs[0], sample_covs[1:]
+    covs[sid] = format_covs_as_position(use_covs)
+covs[None] = 0
+
+#%%
 tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
+tokenizer._pad = lambda *args, **kwargs: collator._pad(tokenizer, *args, **kwargs)
 #%%
 bert_emb_size = args.embdim
 bertconfig = BertConfig(
@@ -120,6 +148,7 @@ datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
     ids,
+    covs,
     separator='[SEP]',
     max_length=512,
     shuffle_in_visit=False if args.disable_visit_shuffle else phase=='train',
@@ -140,7 +169,7 @@ for cutoff in [50, 100, 200]:
     print(f'Tokens <{cutoff}:', len(least_frequent[f'least{cutoff}']))
     prev_cval = cval
 
-data_collator = DataCollatorForLanguageModeling(
+data_collator = CustomDataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
@@ -201,7 +230,7 @@ class CustomCallback(TrainerCallback):
                 wandb.log({
                     'histogram-coef_learn': wandb.plot.histogram(table, "coefs", title="Embedding mixing coefficient")
                 })
-        torch.save(model.state_dict(), f'saved/{mdlname}.pth')
+            torch.save(model.state_dict(), f'saved/{mdlname}.pth')
 
 trainer = Trainer(
     model=model,

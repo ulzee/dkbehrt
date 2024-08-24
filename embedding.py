@@ -84,8 +84,28 @@ class NonTorchVariableHolder:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+class CovariateAddEmbeddings(BertEmbeddings):
 
-class KeepInputEmbeddings(BertEmbeddings):
+    def forward(
+        self,
+        **kwargs
+    ) -> torch.Tensor:
+
+        # covariates will be passed as position_ids
+        #  for best compatibility with hugg
+        if 'position_ids' in kwargs:
+            self.covariates = kwargs['position_ids']
+            del kwargs['position_ids']
+
+        out = BertEmbeddings.forward(self, **kwargs)
+
+        if hasattr(self, 'covariates'):
+            # apply covariates signal to processed embeddings
+            out += self.covariates.unsqueeze(-1)
+
+        return out
+
+class KeepInputEmbeddings(CovariateAddEmbeddings):
     # A way to access the input_ids later by other modules
 
     def __init__(self, **kwargs):
@@ -97,7 +117,7 @@ class KeepInputEmbeddings(BertEmbeddings):
         **kwargs
     ) -> torch.Tensor:
 
-        out = BertEmbeddings.forward(self, **kwargs)
+        out = CovariateAddEmbeddings.forward(self, **kwargs)
 
         self.input_ids.input_ids = kwargs['input_ids']
 
