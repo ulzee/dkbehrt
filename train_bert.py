@@ -3,12 +3,14 @@ import argparse
 import os, sys
 #%%
 parser = argparse.ArgumentParser()
+parser.add_argument('--dataset', type=str, required=True)
 parser.add_argument('--mode', type=str, default='base')
 parser.add_argument('--use_embedding', type=str, default=None)
 parser.add_argument('--layers', type=int, default=1)
 parser.add_argument('--heads', type=int, default=1)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--embdim', type=int, default=192)
+parser.add_argument('--val_subsample', type=int, default=10)
 parser.add_argument('--eval_batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-5)
 parser.add_argument('--epochs', type=int, default=100)
@@ -22,7 +24,7 @@ parser.add_argument('--covariates', default='gender,age', type=str)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
-    os.environ["WANDB_PROJECT"] = "icdbert"
+    os.environ["WANDB_PROJECT"] = f'icdbert-{args.dataset}'
     os.environ["WANDB_LOG_MODEL"] = "end"
     import wandb
 else:
@@ -48,12 +50,12 @@ import utils
 import random, string
 run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 #%%
-with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
+with open(f'saved/{args.dataset}/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
-covs = utils.load_covariates('saved/cov.csv', covlist=args.covariates.split(','))
+covs = utils.load_covariates(f'saved/{args.dataset}/cov.csv', covlist=args.covariates.split(','))
 #%%
-tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
+tokenizer = AutoTokenizer.from_pretrained(f'./saved/{args.dataset}/tokenizers/bert-cr{args.code_resolution}')
 tokenizer._pad = lambda *args, **kwargs: collator._pad(tokenizer, *args, **kwargs)
 #%%
 bert_emb_size = args.embdim
@@ -122,8 +124,8 @@ elif args.mode in ['emb', 'attn']:
         print('Attached weighted attention layers.')
 
 # %%
-phase_ids = { phase: np.genfromtxt(f'files/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
-phase_ids['val'] = phase_ids['val'][::10]
+phase_ids = { phase: np.genfromtxt(f'files/{args.dataset}/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
+phase_ids['val'] = phase_ids['val'][::args.val_subsample]
 datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
@@ -156,7 +158,7 @@ data_collator = CustomDataCollatorForLanguageModeling(
 mdlname = f'bert-{args.mode}-cr{args.code_resolution}-lr{args.lr}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
 print(mdlname)
 training_args = TrainingArguments(
-    output_dir=f'runs/{mdlname}',
+    output_dir=f'runs/{args.dataset}/{mdlname}',
     per_device_train_batch_size=args.batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
     eval_accumulation_steps=15,
@@ -213,7 +215,7 @@ class CustomCallback(TrainerCallback):
                 })
 
             if state.global_step > 0:
-                ckpt_path = f'runs/{mdlname}/checkpoint-{state.global_step}'
+                ckpt_path = f'runs/{args.dataset}/{mdlname}/checkpoint-{state.global_step}'
                 if not os.path.exists(ckpt_path):
                     os.mkdir(ckpt_path)
                 torch.save(
@@ -232,5 +234,4 @@ trainer = Trainer(
 #%%
 trainer.evaluate()
 trainer.train()
-# %%
 # %%
