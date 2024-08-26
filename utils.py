@@ -87,7 +87,7 @@ class ICDDataset(Dataset):
         return sample
 
 class EHROutcomesDataset(Dataset):
-    def __init__(self, task, ehr_outcomes_path, tokenizer, patient_ids, code_resolution, covs=None, separator='[SEP]', max_length=None, shuffle_in_visit=True):
+    def __init__(self, task, ehr_outcomes_path, tokenizer, patient_ids, covs=None, code_resolution=5, separator='[SEP]', max_length=None, shuffle_in_visit=True, verbose=True):
         with open(f'{ehr_outcomes_path}/saved/dx.pk', 'rb') as fl:
             self.dxs = pk.load(fl)
 
@@ -107,7 +107,10 @@ class EHROutcomesDataset(Dataset):
         pdict = { i: True for i in patient_ids }
         self.pids = [i for i in self.stays['subject_id'].unique() if i in pdict]
         self.stays = self.stays.set_index('subject_id').loc[self.pids].reset_index()
-        self.history = [[[c[:code_resolution].lower() for c in self.dxs[h] if type(c) == str] if h in self.dxs else [] for h in eval(hids)] for hids in tqdm(self.stays['past_visits'])]
+        self.history = [
+            [[c[:code_resolution].lower() for c in self.dxs[h] if type(c) == str] if h in self.dxs else [] \
+                for h in eval(hids)] \
+                    for hids in (tqdm if verbose else lambda x: x)(self.stays['past_visits'])]
         self.labels = self.stays[task].values.tolist()
 
     def __len__(self):
@@ -117,20 +120,31 @@ class EHROutcomesDataset(Dataset):
 
         code_series = ''
         byvisit = self.history[i]
-        for vi, cinv in enumerate(byvisit):
+        visit_ids = eval(self.stays['past_visits'][i])
+        if self.covs is not None: cov_hist = []
+        for vi, (vid, cinv) in enumerate(zip(visit_ids, byvisit)):
             if self.shuffle_in_visit:
                 shuffle(cinv)
             for c in cinv:
                 code_series += f' {c}'
-            if vi != len(byvisit) - 1: code_series += f' {self.separator}'
+                if self.covs is not None: cov_hist += [self.covs[vid]]
+            if vi != len(byvisit) - 1:
+                code_series += f' {self.separator}'
+                if self.covs is not None: cov_hist += [self.covs[None]]
 
-        item = { k: v for k, v in self.tokenizer(
+        sample = { k: v for k, v in self.tokenizer(
             code_series, padding=True,
             truncation=self.max_length is not None,
             max_length=self.max_length).items()  if k not in ['token_type_ids']}
-        item['labels'] = [[1.0, 0.0], [0.0, 1.0]][self.labels[i]]
+        sample['labels'] = [[1.0, 0.0], [0.0, 1.0]][self.labels[i]]
 
-        return item
+        if self.covs is not None:
+            blank_cov = [self.covs[None]]
+            if self.max_length is not None:
+                cov_hist = cov_hist[:self.max_length-2]
+            sample['position_ids'] = blank_cov + cov_hist + blank_cov # matches tokenizer pad
+
+        return sample
 
 def topk_accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
@@ -162,3 +176,27 @@ class HugMetrics:
             topaccs = topk_accuracy(logits[where_prediction], labels[where_prediction], topk=topns)
 
             assert { n: acc for n, acc in zip(topns, topaccs) }
+
+def load_covariates(covfile='saved/cov.csv', covlist=['gender', 'age']):
+    cdf = pd.read_csv(covfile)
+    covs = dict()
+    def format_covs_as_position(covls):
+        flip_factor = 1
+        pos_value = 0.01
+        for cv, cname in zip(covls, covlist):
+            if cname == 'gender':
+                if cv in 'MF':
+                    flip_factor = [-1, 1]['MF'.index(cv)]
+                else:
+                    raise Exception('Not supported')
+            elif cname == 'age':
+                pos_value = cv/100/100
+            else:
+                print('WARN: unknown covariate')
+        return flip_factor * pos_value
+
+    for sample_covs in zip(*([cdf['hadm_id']] + [cdf[c] for c in covlist])):
+        sid, use_covs = sample_covs[0], sample_covs[1:]
+        covs[sid] = format_covs_as_position(use_covs)
+    covs[None] = 0
+    return covs

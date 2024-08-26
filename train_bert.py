@@ -51,28 +51,7 @@ run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
-cdf = pd.read_csv('saved/cov.csv')
-covs = dict()
-def format_covs_as_position(covls):
-    flip_factor = 1
-    pos_value = 0.01
-    for cv, cname in zip(covls, args.covariates.split(',')):
-        if cname == 'gender':
-            if cv in 'MF':
-                flip_factor = [-1, 1]['MF'.index(cv)]
-            else:
-                raise Exception('Not supported')
-        elif cname == 'age':
-            pos_value = cv/100/100
-        else:
-            print('WARN: unknown covariate')
-    return flip_factor * pos_value
-
-for sample_covs in zip(*([cdf['hadm_id']] + [cdf[c] for c in args.covariates.split(',')])):
-    sid, use_covs = sample_covs[0], sample_covs[1:]
-    covs[sid] = format_covs_as_position(use_covs)
-covs[None] = 0
-
+covs = utils.load_covariates('saved/cov.csv', covlist=args.covariates.split(','))
 #%%
 tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
 tokenizer._pad = lambda *args, **kwargs: collator._pad(tokenizer, *args, **kwargs)
@@ -88,7 +67,9 @@ bertconfig = BertConfig(
 )
 model = BertForMaskedLM(bertconfig)
 #%%
-if args.mode in ['emb', 'attn']:
+if args.mode == 'base':
+    model.bert.embeddings = embedding.CovariateAddEmbeddings(config=bertconfig)
+elif args.mode in ['emb', 'attn']:
     assert args.use_embedding is not None
 
     els = None
@@ -112,7 +93,6 @@ if args.mode in ['emb', 'attn']:
         # els /= np.std(els, axis=0)
 
         print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
-
 
     if args.mode == 'emb':
         if els.shape[1] <= bertconfig.hidden_size:

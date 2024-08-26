@@ -3,6 +3,7 @@ import argparse
 import os, sys
 #%%
 parser = argparse.ArgumentParser()
+parser.add_argument('--dataset', type=str, required=True)
 parser.add_argument('--load', type=str, required=True)
 parser.add_argument('--scratch', action='store_true', default=False)
 parser.add_argument('--freeze', action='store_true', default=False)
@@ -22,52 +23,56 @@ parser.add_argument('--predict', action='store_true', default=False)
 parser.add_argument('--predict_set', default='test', type=str)
 parser.add_argument('--val_subsample', default=10, type=int)
 parser.add_argument('--eval_test', default=False, action='store_true')
+parser.add_argument('--covariates', default='gender,age', type=str)
+parser.add_argument('--silent', default=False, action='store_true')
 args = parser.parse_args()
 #%%
 if not args.nowandb:
-    os.environ["WANDB_PROJECT"] = f'ehr-outcomes-{args.task}'
+    os.environ["WANDB_PROJECT"] = f'ehr-outcomes-{args.dataset}-{args.task}'
     os.environ["WANDB_LOG_MODEL"] = "end"
-    import wandb
 else:
     os.environ['WANDB_DISABLED'] = 'true'
 if not args.disable_visible_devices:
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
-# else:
-#     torch.cuda_set_device(int(os.environ['CUDA_VISIBLE_DEVICES']))
+
 import torch
 import torch.nn as nn
 import pickle as pk
 import numpy as np
-from transformers import BertConfig, BertForMaskedLM, TrainerCallback
-from transformers.integrations import WandbCallback
+from transformers.utils import logging
+from transformers import TrainerCallback
 from transformers import AutoTokenizer, TrainingArguments, Trainer, BertForSequenceClassification
-from torch.utils.data import Dataset
 import embedding
 import attention
 import utils
 from sklearn.metrics import roc_auc_score, average_precision_score, f1_score
 import random, string
-import evaluate
-metric = evaluate.load("accuracy")
-run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
+import collator
+if args.silent: logging.set_verbosity_error()
 #%%
+run_tag = ''.join(random.choices(string.ascii_letters + string.digits, k=5))
 model_mode = args.load.split('/')[-2].split('-')[1] # expects model_name/checkpoint_num folders
 #%%
-with open(f'saved/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
+with open(f'saved/{args.dataset}/diagnoses-cr{args.code_resolution}.pk', 'rb') as fl:
     dxs = pk.load(fl)
 #%%
-tokenizer = AutoTokenizer.from_pretrained(f'./saved/tokenizers/bert-cr{args.code_resolution}')
+covs = utils.load_covariates(f'saved/{args.dataset}/cov.csv', covlist=args.covariates.split(','))
+#%%
+tokenizer = AutoTokenizer.from_pretrained(f'./saved/{args.dataset}/tokenizers/bert-cr{args.code_resolution}')
+tokenizer._pad = lambda *args, **kwargs: collator._pad(tokenizer, *args, **kwargs)
 #%%
 loaded_name = args.load.split('/')[-2]
 scratchtag = ('pretrained_frozen-' if args.freeze else 'pretrained-') if not args.scratch else f'scratch-'
 subtag = '' if args.subsample is None else f'sub{args.subsample}-'
 mdlname = f'ft-{subtag}{scratchtag}{args.task}-ftlr{args.lr}-{loaded_name}'
-print(mdlname)
+if not args.silent: print(mdlname)
 
 model = BertForSequenceClassification.from_pretrained(args.load, num_labels=2)
 if model_mode == 'base':
-    if args.scratch:
-        model = BertForSequenceClassification(model.config)
+    model = BertForSequenceClassification(model.config)
+    model.bert.embeddings = embedding.CovariateAddEmbeddings(config=model.config)
+    if not args.scratch:
+        model.load_state_dict(torch.load(f'{args.load}/weights.pth'), strict=False)
 elif model_mode == 'attn':
 
     # load embeddings
@@ -103,13 +108,13 @@ elif model_mode == 'attn':
             embeddings=embedding_dict_holder,
             current_input=model.bert.embeddings.input_ids)
 
-    print('Attached weighted attention layers.')
+    if not args.silent: print('Attached weighted attention layers.')
 
     if not args.scratch:
-        model.load_state_dict(torch.load(f'saved/{loaded_name}.pth'), strict=False)
+        model.load_state_dict(torch.load(f'{args.load}/weights.pth'), strict=False)
         # NOTE: until we can figure out a way to make hug trainer save custom models, we need to load from a state dict
 #%%
-phase_ids = { phase: np.genfromtxt(f'files/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
+phase_ids = { phase: np.genfromtxt(f'files/{args.dataset}/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 if args.subsample is not None:
     phase_ids['train'] = phase_ids['train'][::args.subsample]
 if not args.predict:
@@ -121,9 +126,11 @@ datasets = { phase: utils.EHROutcomesDataset(
     args.ehr_outcomes_path,
     tokenizer,
     ids,
+    covs,
     max_length=512,
     code_resolution=args.code_resolution, # WARN: the benchmark may not parse to the same resolution
     shuffle_in_visit=phase=='train',
+    verbose=not args.silent,
 ) for phase, ids in phase_ids.items() }
 
 training_args = TrainingArguments(
@@ -134,7 +141,7 @@ training_args = TrainingArguments(
     learning_rate=args.lr,
     num_train_epochs=args.epochs,
     report_to='wandb' if not args.nowandb else None,
-    evaluation_strategy='steps',
+    eval_strategy='steps',
     run_name=mdlname,
     eval_steps=args.eval_steps,
     save_steps=2000,
@@ -174,7 +181,7 @@ class CustomCallback(TrainerCallback):
                     self.best_loss = logs['eval_val_loss']
 
                     print('saved ckpt:', logs['eval_val_loss'])
-                    torch.save(model.state_dict(), f'saved/best_{mdlname}.pth')
+                    torch.save(model.state_dict(), f'saved/{args.dataset}/best_{mdlname}.pth')
 
 if args.freeze:
     train_params = ['bert.pooler.dense.bias', 'bert.pooler.dense.weight', 'classifier.bias', 'classifier.weight']
@@ -198,10 +205,10 @@ if not args.predict:
     trainer.train()
 else:
     if args.task in ['mortality', 'los72']:
-        with open(f'../ehr-outcomes/files/boot_ixs.pk', 'rb') as fl:
+        with open(f'../ehr-outcomes/files/{args.dataset}/boot_ixs.pk', 'rb') as fl:
             boot_ixs = pk.load(fl)
     else:
-        with open(f'../ehr-outcomes/files/boot_ixs_{args.task}.pk', 'rb') as fl:
+        with open(f'../ehr-outcomes/files/{args.dataset}/boot_ixs_{args.task}.pk', 'rb') as fl:
             boot_ixs = pk.load(fl)
 
     def get_boot_metrics(ypred):
@@ -216,14 +223,14 @@ else:
 
         out = ''
         for tag, replicates in zip(['ap', 'roc', 'f1'], zip(*ls)):
-            est, replicates = replicates[0], replicates[1:]
-            ci = 1.95*np.std(replicates)
-            out += f'{tag}:{est:.3f} ({ci:.3f}) '
+            est, replicates = replicates[0]*100, replicates[1:]
+            ci = 1.95*np.std(np.array(replicates)*100)
+            out += f'{tag}:{est:.2f} ({ci:.2f}) '
 
         print(out)
 
 
-    model.load_state_dict(torch.load(f'saved/best_{mdlname}.pth'))
+    model.load_state_dict(torch.load(f'saved/{args.dataset}/best_{mdlname}.pth'))
     tester = Trainer(
         model=model,
         tokenizer=tokenizer,
