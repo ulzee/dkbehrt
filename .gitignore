@@ -5,3 +5,4 @@ saved
 test_trainer
 *.pth
 paths.py
+__pycache__/

@@ -10,20 +10,21 @@ import shutil
 from glob import glob
 import json
 #%%
-code_resolution = int(sys.argv[1])
+dataset = sys.argv[1]
+code_resolution = int(sys.argv[2])
 #%%
 mdlname = f'bert-cr{code_resolution}'
-if not os.path.exists(f'{project_root}/saved/tokenizers'):
-    os.mkdir(f'{project_root}/saved/tokenizers')
-if not os.path.exists(f'{project_root}/saved/tokenizers/{mdlname}'):
-    os.mkdir(f'{project_root}/saved/tokenizers/{mdlname}')
+if not os.path.exists(f'{project_root}/saved/{dataset}/tokenizers'):
+    os.mkdir(f'{project_root}/saved/{dataset}/tokenizers')
+if not os.path.exists(f'{project_root}/saved/{dataset}/tokenizers/{mdlname}'):
+    os.mkdir(f'{project_root}/saved/{dataset}/tokenizers/{mdlname}')
 #%%
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='config.json', cache_dir='saved/')
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='tokenizer.json', cache_dir='saved/')
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='tokenizer_config.json', cache_dir='saved/')
 hf_hub_download(repo_id='google-bert/bert-base-uncased', filename='vocab.txt', cache_dir='saved/')
 #%%
-with open(f'saved/vocab-cr{code_resolution}.pk', 'rb') as fl:
+with open(f'saved/{dataset}/vocab-cr{code_resolution}.pk', 'rb') as fl:
     vocab = pk.load(fl)
 len(vocab)
 # %%
@@ -56,10 +57,10 @@ tkobj
 # %%
 for fl in glob(f'{project_root}/saved/models--google-bert--bert-base-uncased/snapshots/**/*'):
     print(fl)
-    shutil.copyfile(fl, f'{project_root}/saved/tokenizers/{mdlname}/' + fl.split('/')[-1])
+    shutil.copyfile(fl, f'{project_root}/saved/{dataset}/tokenizers/{mdlname}/' + fl.split('/')[-1])
 # %%
-with open(f'{project_root}/saved/tokenizers/{mdlname}/tokenizer.json', 'w') as fl:
+with open(f'{project_root}/saved/{dataset}/tokenizers/{mdlname}/tokenizer.json', 'w') as fl:
     json.dump(tkobj, fl, indent=4)
 #%%
-with open(f'{project_root}/saved/tokenizers/{mdlname}/vocab.txt', 'w') as fl:
+with open(f'{project_root}/saved/{dataset}/tokenizers/{mdlname}/vocab.txt', 'w') as fl:
     fl.write('\n'.join(new_token_set))
