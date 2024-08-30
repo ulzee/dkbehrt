@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple, Union
 
 import math
 import torch
+import torch.nn as nn
 import torch.utils.checkpoint
 from packaging import version
 from torch import nn
@@ -100,11 +101,8 @@ class WeightedAttention(BertSelfAttention):
 
         edim = self.embeddings.extra_embeddings.weight.shape[1]
         self.emb_mlp = nn.Linear(edim, edim)
-        # self.emb_mlp = nn.Sequential(
-        #     nn.Linear(edim, edim//2),
-        #     nn.ReLU(),
-        #     nn.Linear(edim//2, edim)
-        # )
+        nn.init.eye_(self.emb_mlp.weight)
+        nn.init.zeros_(self.emb_mlp.bias)
 
     def forward(
         self,

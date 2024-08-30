@@ -10,6 +10,7 @@ parser.add_argument('--layers', type=int, default=1)
 parser.add_argument('--heads', type=int, default=1)
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--embdim', type=int, default=192)
+parser.add_argument('--train_subsample', default=None, type=int)
 parser.add_argument('--val_subsample', type=int, default=10)
 parser.add_argument('--eval_batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-5)
@@ -126,6 +127,8 @@ elif args.mode in ['emb', 'attn']:
 # %%
 phase_ids = { phase: np.genfromtxt(f'files/{args.dataset}/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 phase_ids['val'] = phase_ids['val'][::args.val_subsample]
+if args.train_subsample is not None:
+    phase_ids['train'] = phase_ids['train'][::args.train_subsample]
 datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
@@ -155,7 +158,8 @@ data_collator = CustomDataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm=True, mlm_probability=args.mask_ratio,
 )
 
-mdlname = f'bert-{args.mode}-cr{args.code_resolution}-lr{args.lr}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
+subtag = '' if args.train_subsample is None else f'sub{args.train_subsample}-'
+mdlname = f'bert-{args.mode}-{subtag}cr{args.code_resolution}-lr{args.lr}-e{args.embdim}-layers{args.layers}-h{args.heads}_{run_tag}'
 print(mdlname)
 training_args = TrainingArguments(
     output_dir=f'runs/{args.dataset}/{mdlname}',
