@@ -14,7 +14,7 @@ parser.add_argument('--train_subsample', default=None, type=int)
 parser.add_argument('--val_subsample', type=int, default=10)
 parser.add_argument('--eval_batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-5)
-parser.add_argument('--epochs', type=int, default=50)
+parser.add_argument('--epochs', type=int, default=100)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--mask_ratio', type=float, default=0.5)
@@ -129,7 +129,7 @@ elif args.mode in ['emb', 'attn']:
 phase_ids = { phase: np.genfromtxt(f'files/{args.dataset}/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
 phase_ids['val'] = phase_ids['val'][::args.val_subsample]
 if args.train_subsample is not None:
-    phase_ids['train'] = phase_ids['train'][::args.train_subsample]
+    phase_ids['train'] = phase_ids['train'][:args.train_subsample]
 datasets = { phase: utils.ICDDataset(
     dxs,
     tokenizer,
