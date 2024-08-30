@@ -25,6 +25,7 @@ parser.add_argument('--val_subsample', default=10, type=int)
 parser.add_argument('--eval_test', default=False, action='store_true')
 parser.add_argument('--covariates', default='gender,age', type=str)
 parser.add_argument('--silent', default=False, action='store_true')
+parser.add_argument('--use_embedding', type=str, default=None)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
@@ -76,8 +77,7 @@ if model_mode == 'base':
 elif model_mode == 'attn':
 
     # load embeddings
-    # use_embedding = '../data/icd10/embeddings/kane/biogpt100_collated.pk'
-    use_embedding = '../data/icd10/embeddings/hug/microsoft--biogpt_hidden_collated.pk'
+    use_embedding = args.use_embedding
     with open(use_embedding, 'rb') as fl:
         edict = pk.load(fl)
     edim = len(next(iter(edict.values())))
@@ -114,7 +114,7 @@ elif model_mode == 'attn':
         model.load_state_dict(torch.load(f'{args.load}/weights.pth'), strict=False)
         # NOTE: until we can figure out a way to make hug trainer save custom models, we need to load from a state dict
 #%%
-phase_ids = { phase: np.genfromtxt(f'files/{args.dataset}/{phase}_ids.txt') for phase in ['train', 'val', 'test'] }
+phase_ids = { phase: np.genfromtxt(f'files/{args.dataset}/{phase}_ids.txt').astype(int) for phase in ['train', 'val', 'test'] }
 if args.subsample is not None:
     phase_ids['train'] = phase_ids['train'][::args.subsample]
 if not args.predict:
@@ -123,7 +123,7 @@ if not args.predict:
 
 datasets = { phase: utils.EHROutcomesDataset(
     args.task,
-    args.ehr_outcomes_path,
+    f'{args.ehr_outcomes_path}/saved/{args.dataset}',
     tokenizer,
     ids,
     covs,
@@ -218,7 +218,7 @@ else:
             ls += [[
                 average_precision_score(ytrue[bxs], ypred[bxs]),
                 roc_auc_score(ytrue[bxs], ypred[bxs]),
-                f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='macro'),
+                f1_score(ytrue[bxs], ypred[bxs] > 0.5, average='micro'),
             ]]
 
         out = ''

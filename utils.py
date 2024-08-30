@@ -88,13 +88,13 @@ class ICDDataset(Dataset):
 
 class EHROutcomesDataset(Dataset):
     def __init__(self, task, ehr_outcomes_path, tokenizer, patient_ids, covs=None, code_resolution=5, separator='[SEP]', max_length=None, shuffle_in_visit=True, verbose=True):
-        with open(f'{ehr_outcomes_path}/saved/dx.pk', 'rb') as fl:
+        with open(f'{ehr_outcomes_path}/dx.pk', 'rb') as fl:
             self.dxs = pk.load(fl)
 
         if task in ['mortality', 'los72']:
-            self.stays = pd.read_csv(f'{ehr_outcomes_path}/saved/targets_by_icustay.csv')
+            self.stays = pd.read_csv(f'{ehr_outcomes_path}/targets_by_icustay.csv')
         else:
-            self.stays = pd.read_csv(f'{ehr_outcomes_path}/saved/targets_diagnosis_{task}.csv')
+            self.stays = pd.read_csv(f'{ehr_outcomes_path}/targets_diagnosis_{task}.csv')
 
         self.shuffle_in_visit = shuffle_in_visit
         self.tokenizer = tokenizer
