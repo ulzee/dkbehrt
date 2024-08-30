@@ -14,7 +14,7 @@ parser.add_argument('--train_subsample', default=None, type=int)
 parser.add_argument('--val_subsample', type=int, default=10)
 parser.add_argument('--eval_batch_size', type=int, default=32)
 parser.add_argument('--lr', type=float, default=1e-5)
-parser.add_argument('--epochs', type=int, default=100)
+parser.add_argument('--epochs', type=int, default=50)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--mask_ratio', type=float, default=0.5)
@@ -25,7 +25,8 @@ parser.add_argument('--covariates', default='gender,age', type=str)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
-    os.environ["WANDB_PROJECT"] = f'icdbert-{args.dataset}'
+    wandb_subtag = '' if args.train_subsample is None else '-sub'
+    os.environ["WANDB_PROJECT"] = f'icdbert-{args.dataset}{wandb_subtag}'
     os.environ["WANDB_LOG_MODEL"] = "end"
     import wandb
 else:
