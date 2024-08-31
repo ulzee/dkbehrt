@@ -13,8 +13,10 @@ parser.add_argument('--embdim', type=int, default=192)
 parser.add_argument('--train_subsample', default=None, type=int)
 parser.add_argument('--val_subsample', type=int, default=10)
 parser.add_argument('--eval_batch_size', type=int, default=32)
+parser.add_argument('--eval_steps', type=int, default=2000)
 parser.add_argument('--lr', type=float, default=1e-5)
 parser.add_argument('--epochs', type=int, default=100)
+parser.add_argument('--max_steps', type=int, default=None)
 parser.add_argument('--gpus', type=str, default='0')
 parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--mask_ratio', type=float, default=0.5)
@@ -169,11 +171,12 @@ training_args = TrainingArguments(
     eval_accumulation_steps=15,
     learning_rate=args.lr,
     num_train_epochs=args.epochs,
+    max_steps=-1 if args.max_steps is None else args.max_steps,
     report_to='wandb' if not args.nowandb else None,
     evaluation_strategy='steps',
     run_name=mdlname,
-    eval_steps=2000,
-    save_steps=2000,
+    eval_steps=args.eval_steps,
+    save_steps=args.eval_steps,
 )
 
 def compute_metrics(eval_pred, mask_value=-100, topns=(1, 5, 10)):

@@ -14,6 +14,7 @@ parser.add_argument('--epochs', type=int, default=50)
 parser.add_argument('--batch_size', type=int, default=192)
 parser.add_argument('--eval_batch_size', type=int, default=64)
 parser.add_argument('--eval_steps', type=int, default=50)
+parser.add_argument('--save_steps', type=int, default=2000)
 parser.add_argument('--lr', type=float, default=5e-4)
 parser.add_argument('--disable_visible_devices', action='store_true', default=False)
 parser.add_argument('--subsample', type=int, default=None)
@@ -21,6 +22,7 @@ parser.add_argument('--ehr_outcomes_path', type=str, default='../ehr-outcomes')
 parser.add_argument('--nowandb', action='store_true', default=False)
 parser.add_argument('--predict', action='store_true', default=False)
 parser.add_argument('--predict_set', default='test', type=str)
+parser.add_argument('--train_subsample', default=None, type=int)
 parser.add_argument('--val_subsample', default=10, type=int)
 parser.add_argument('--eval_test', default=False, action='store_true')
 parser.add_argument('--covariates', default='gender,age', type=str)
@@ -120,6 +122,8 @@ if args.subsample is not None:
 if not args.predict:
     # reduce val set to not slow down training
     phase_ids['val'] = phase_ids['val'][::args.val_subsample]
+if args.train_subsample is not None:
+    phase_ids['train'] = phase_ids['train'][:args.train_subsample]
 
 datasets = { phase: utils.EHROutcomesDataset(
     args.task,
@@ -144,7 +148,7 @@ training_args = TrainingArguments(
     eval_strategy='steps',
     run_name=mdlname,
     eval_steps=args.eval_steps,
-    save_steps=2000,
+    save_steps=args.save_steps,
 )
 
 def compute_metrics(eval_pred):
