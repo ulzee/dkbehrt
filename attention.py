@@ -92,7 +92,7 @@ def weighted_scaled_dot_product_attention(
     return attn_weight @ value
 
 class WeightedAttention(BertSelfAttention):
-    def __init__(self, config, embeddings, current_input, position_embedding_type='absolute'):
+    def __init__(self, config, embeddings, current_input, position_embedding_type='absolute', use_proj='linear'):
         super().__init__(config, position_embedding_type=position_embedding_type)
         self.dropout_prob = config.attention_probs_dropout_prob
         self.require_contiguous_qkv = version.parse(get_torch_version()) < version.parse("2.2.0")
@@ -100,9 +100,11 @@ class WeightedAttention(BertSelfAttention):
         self.current_input = current_input
 
         edim = self.embeddings.extra_embeddings.weight.shape[1]
-        self.emb_mlp = nn.Linear(edim, edim)
-        nn.init.eye_(self.emb_mlp.weight)
-        nn.init.zeros_(self.emb_mlp.bias)
+        self.emb_mlp = lambda x: x
+        if use_proj == 'linear':
+            self.emb_mlp = nn.Linear(edim, edim)
+            # nn.init.eye_(self.emb_mlp.weight)
+            # nn.init.zeros_(self.emb_mlp.bias)
 
     def forward(
         self,

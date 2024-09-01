@@ -24,6 +24,7 @@ parser.add_argument('--code_resolution', type=int, default=5)
 parser.add_argument('--disable_visit_shuffle', action='store_true', default=False)
 parser.add_argument('--disable_visible_devices', action='store_true', default=False)
 parser.add_argument('--covariates', default='gender,age', type=str)
+parser.add_argument('--emb_proj', default='linear', type=str)
 args = parser.parse_args()
 #%%
 if not args.nowandb:
@@ -123,7 +124,8 @@ elif args.mode in ['emb', 'attn']:
             layer.attention.self = attention.WeightedAttention(
                 config=bertconfig,
                 embeddings=embedding_dict_holder,
-                current_input=model.bert.embeddings.input_ids)
+                current_input=model.bert.embeddings.input_ids,
+                use_proj=args.emb_proj)
 
         print('Attached weighted attention layers.')
 
