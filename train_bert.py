@@ -74,6 +74,26 @@ bertconfig = BertConfig(
 )
 model = BertForMaskedLM(bertconfig)
 #%%
+
+def load_embedding_file(fname):
+    with open(fname, 'rb') as fl:
+        edict = pk.load(fl)
+    edim = len(next(iter(edict.values())))
+
+    template = np.zeros((len(tokenizer.vocab), edim))
+    nmatched = 0
+    for w, i in tokenizer.vocab.items():
+        w = w.upper()
+        if w in edict:
+            template[i] = edict[w]
+            nmatched += 1
+    els = np.array(template).astype(np.float32)
+    els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
+
+    print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
+
+    return els
+
 if args.mode == 'base':
     model.bert.embeddings = embedding.CovariateAddEmbeddings(config=bertconfig)
 elif args.mode in ['emb', 'attn']:
@@ -83,23 +103,15 @@ elif args.mode in ['emb', 'attn']:
     if args.use_embedding == 'zeros':
         els = np.zeros((len(tokenizer.vocab), 100))
         print(f'Loading all-zero embeddings (for debugging)')
-    else:
-        with open(args.use_embedding, 'rb') as fl:
-            edict = pk.load(fl)
-        edim = len(next(iter(edict.values())))
-
-        template = np.zeros((len(tokenizer.vocab), edim))
-        nmatched = 0
-        for w, i in tokenizer.vocab.items():
-            w = w.upper()
-            if w in edict:
-                template[i] = edict[w]
-                nmatched += 1
-        els = np.array(template).astype(np.float32)
-        els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
-        # els /= np.std(els, axis=0)
-
-        print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
+    elif '.txt' not in args.use_embedding:
+        els = load_embedding_file(args.use_embedding)
+        emb_dict_list = [els]
+    elif '.txt' in args.use_embedding:
+        emb_dict_list = []
+        with open(args.use_embedding) as fl:
+            for efilename in fl:
+                efilename = efilename.strip()
+                emb_dict_list += [load_embedding_file(efilename)]
 
     if args.mode == 'emb':
         if els.shape[1] <= bertconfig.hidden_size:
@@ -115,15 +127,19 @@ elif args.mode in ['emb', 'attn']:
 
         model.bert.embeddings = embedding.KeepInputEmbeddings(config=bertconfig)
 
-        extra_embeddings = nn.Embedding(*els.shape)
-        extra_embeddings.weight = nn.Parameter(torch.from_numpy(els.astype(np.float32)).cuda(), requires_grad=False)
-        embedding_dict_holder = embedding.NonTorchVariableHolder(
-            extra_embeddings=extra_embeddings)
+        emb_holders = []
+        for ei, ith_embset in enumerate(emb_dict_list):
+            extra_embeddings = nn.Embedding(*ith_embset.shape)
+            extra_embeddings.weight = nn.Parameter(torch.from_numpy(ith_embset.astype(np.float32)).cuda(), requires_grad=False)
+            emb_holders += [
+                embedding.NonTorchVariableHolder(
+                    extra_embeddings=extra_embeddings)
+            ]
 
         for layer in model.bert.encoder.layer:
             layer.attention.self = attention.WeightedAttention(
                 config=bertconfig,
-                embeddings=embedding_dict_holder,
+                embeddings=emb_holders, # NOTE: now expects a list (should be list of one item for one emb set)
                 current_input=model.bert.embeddings.input_ids,
                 use_proj=args.emb_proj)
 
