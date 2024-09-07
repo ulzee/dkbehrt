@@ -107,12 +107,12 @@ class WeightedAttention(BertSelfAttention):
             if use_proj == 'linear':
                 self.emb_mlp.append(nn.Linear(edim, edim))
             elif use_proj == 'linear_scaler':
-                self.emb_mlp.append(nn.Linear(edim, edim))
+                self.emb_mlp.append(nn.Linear(edim, 1024))
+                # nn.init.eye_(self.emb_mlp[-1].weight)
+                # nn.init.zeros_(self.emb_mlp[-1].bias)
                 self.emb_scaler.append(nn.Parameter(torch.ones(nembs), requires_grad=True))
             else:
                 self.emb_mlp.append(nn.Identity())
-            # nn.init.eye_(self.emb_mlp.weight)
-            # nn.init.zeros_(self.emb_mlp.bias)
 
     def forward(
         self,
@@ -166,15 +166,17 @@ class WeightedAttention(BertSelfAttention):
         )
 
         # NOTE: New
-        emb_sim = 0
+        prior_embs = 0
         for embset_idx, embedding in enumerate(self.embeddings):
             user_embs = embedding.extra_embeddings.to(
                 self.current_input.input_ids.device)
             indexed_embs = user_embs(self.current_input.input_ids)
             user_embs_mlp = self.emb_mlp[embset_idx](indexed_embs)
             if self.use_proj == 'linear_scaler':
-                user_embs_mlp = self.emb_scaler[embset_idx][self.current_input.input_ids].unsqueeze(-1) * indexed_embs
-            emb_sim += torch.matmul(user_embs_mlp, user_embs_mlp.transpose(1, 2))
+                user_embs_mlp = self.emb_scaler[embset_idx][self.current_input.input_ids].unsqueeze(-1) * user_embs_mlp
+            prior_embs += user_embs_mlp
+        prior_embs /= len(self.embeddings)
+        emb_sim = torch.matmul(prior_embs, prior_embs.transpose(1, 2))
 
         attn_output = weighted_scaled_dot_product_attention(
             query_layer,

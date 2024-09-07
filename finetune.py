@@ -72,16 +72,9 @@ mdlname = f'ft-{subtag}{scratchtag}{args.task}-ftlr{args.lr}-{loaded_name}'
 if not args.silent: print(mdlname)
 
 model = BertForSequenceClassification.from_pretrained(args.load, num_labels=2)
-if model_mode == 'base':
-    model = BertForSequenceClassification(model.config)
-    model.bert.embeddings = embedding.CovariateAddEmbeddings(config=model.config)
-    if not args.scratch:
-        model.load_state_dict(torch.load(f'{args.load}/weights.pth'), strict=False)
-elif model_mode == 'attn':
 
-    # load embeddings
-    use_embedding = args.use_embedding
-    with open(use_embedding, 'rb') as fl:
+def load_embedding_file(fname):
+    with open(fname, 'rb') as fl:
         edict = pk.load(fl)
     edim = len(next(iter(edict.values())))
 
@@ -95,24 +88,65 @@ elif model_mode == 'attn':
     els = np.array(template).astype(np.float32)
     els = np.array([v/np.sqrt(np.sum(v**2)) if np.sum(v != 0) != 0 else v for v in els])
 
-    # reset the model for now
+    print(f'Loaded embeddings for {nmatched}/{len(tokenizer.vocab)}')
+
+    return els
+
+if model_mode == 'base':
     model = BertForSequenceClassification(model.config)
+    model.bert.embeddings = embedding.CovariateAddEmbeddings(config=model.config)
+    if not args.scratch:
+        model.load_state_dict(torch.load(f'{args.load}/weights.pth'), strict=False)
+elif model_mode == 'attn':
+
+    els = None
+    if args.use_embedding == 'zeros':
+        els = np.zeros((len(tokenizer.vocab), 100))
+        print(f'Loading all-zero embeddings (for debugging)')
+    elif '.txt' not in args.use_embedding:
+        els = load_embedding_file(args.use_embedding)
+        emb_dict_list = [els]
+    elif '.txt' in args.use_embedding:
+        emb_dict_list = []
+        with open(args.use_embedding) as fl:
+            for efilename in fl:
+                efilename = efilename.strip()
+                emb_dict_list += [load_embedding_file(efilename)]
+
+    # reset model for now
+    model = BertForSequenceClassification.from_pretrained(args.load, num_labels=2)
     bertconfig = model.config
-    model.bert.embeddings = embedding.KeepInputEmbeddings(config=bertconfig)
+    if model_mode == 'emb':
+        if els.shape[1] <= bertconfig.hidden_size:
+            els = np.concatenate([els, np.zeros((len(els), bertconfig.hidden_size - els.shape[1]))], axis=1)
+        else:
+            raise 'Not handled'
 
-    extra_embeddings = nn.Embedding(*els.shape)
-    extra_embeddings.weight = nn.Parameter(torch.from_numpy(els.astype(np.float32)).cuda(), requires_grad=False)
-    embedding_dict_holder = embedding.NonTorchVariableHolder(
-        extra_embeddings=extra_embeddings)
+        model.bert.embeddings = embedding.InjectEmbeddings(bertconfig, els, keep_training=False)
 
-    for layer in model.bert.encoder.layer:
-        layer.attention.self = attention.WeightedAttention(
-            config=bertconfig,
-            embeddings=embedding_dict_holder,
-            current_input=model.bert.embeddings.input_ids,
-            use_proj=args.emb_proj)
+    elif model_mode == 'attn':
+        # NOTE: some variables are wrapped in a non-module class to prevent issue
+        #  with safetensors trying to save duplicate (shared) variables
 
-    if not args.silent: print('Attached weighted attention layers.')
+        model.bert.embeddings = embedding.KeepInputEmbeddings(config=bertconfig)
+
+        emb_holders = []
+        for ei, ith_embset in enumerate(emb_dict_list):
+            extra_embeddings = nn.Embedding(*ith_embset.shape)
+            extra_embeddings.weight = nn.Parameter(torch.from_numpy(ith_embset.astype(np.float32)).cuda(), requires_grad=False)
+            emb_holders += [
+                embedding.NonTorchVariableHolder(
+                    extra_embeddings=extra_embeddings)
+            ]
+
+        for layer in model.bert.encoder.layer:
+            layer.attention.self = attention.WeightedAttention(
+                config=bertconfig,
+                embeddings=emb_holders, # NOTE: now expects a list (should be list of one item for one emb set)
+                current_input=model.bert.embeddings.input_ids,
+                use_proj=args.emb_proj)
+
+        if not args.silent: print('Attached weighted attention layers.')
 
     if not args.scratch:
         model.load_state_dict(torch.load(f'{args.load}/weights.pth'), strict=False)
